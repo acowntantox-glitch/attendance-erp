@@ -8,6 +8,48 @@
       "when": 1790052814562,
       "tag": "0000_furry_kulan_gath",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1790060918240,
+      "tag": "0001_unknown_dagger",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790061497050,
+      "tag": "0002_closed_lilandra",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1790061804920,
+      "tag": "0003_omniscient_molly_hayes",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790063891422,
+      "tag": "0004_workable_lucky_pierre",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790063944429,
+      "tag": "0005_closed_xavin",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790070466363,
+      "tag": "0006_flawless_reavers",
+      "breakpoints": true
     }
   ]
 }

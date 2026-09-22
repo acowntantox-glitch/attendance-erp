@@ -5,7 +5,8 @@ export type ErrorCode =
   | "NOT_FOUND"
   | "CONFLICT"
   | "BUSINESS_RULE_VIOLATION"
-  | "INTERNAL_ERROR";
+  | "INTERNAL_ERROR"
+  | "SERVICE_UNAVAILABLE";
 
 export class AppError extends Error {
   readonly code: ErrorCode;
@@ -60,6 +61,12 @@ export class BusinessRuleError extends AppError {
 export class InternalError extends AppError {
   constructor(message = "An unexpected error occurred.") {
     super("INTERNAL_ERROR", message, 500);
+  }
+}
+
+export class ServiceUnavailableError extends AppError {
+  constructor(message = "This feature is not available right now.") {
+    super("SERVICE_UNAVAILABLE", message, 503);
   }
 }
 

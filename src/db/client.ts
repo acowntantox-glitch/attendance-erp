@@ -19,3 +19,8 @@ if (!env.NODE_ENV || env.NODE_ENV !== "production") {
 export const db = drizzle(pool, { schema });
 
 export type Database = typeof db;
+/** The type of `tx` inside `db.transaction(async (tx) => ...)` — structurally close to but not
+ *  identical to `Database` (missing `$client`), so functions that must work both standalone and
+ *  inside a transaction should accept `DbExecutor`, not `Database`. */
+export type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
+export type DbExecutor = Database | Transaction;

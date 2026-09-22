@@ -13,6 +13,12 @@ describe("rbac", () => {
     expect(can("EMPLOYEE", "attendance.create")).toBe(true);
   });
 
+  it("grants every role organization.read — the dashboard layout calls getMyCompany() for every authenticated user regardless of role, to show their own company's name in the header", () => {
+    for (const role of ROLES) {
+      expect(can(role, "organization.read")).toBe(true);
+    }
+  });
+
   it("does not grant MANAGER user management", () => {
     expect(can("MANAGER", "user.manage")).toBe(false);
   });

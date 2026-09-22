@@ -1,4 +1,4 @@
-import { ConflictError, NotFoundError } from "@/lib/errors";
+import { BusinessRuleError, ConflictError, NotFoundError } from "@/lib/errors";
 
 export class DuplicateCodeError extends ConflictError {
   constructor(entity: string, code: string) {
@@ -27,5 +27,35 @@ export class DepartmentNotFoundError extends NotFoundError {
 export class LocationNotFoundError extends NotFoundError {
   constructor() {
     super("Location");
+  }
+}
+
+export class DesignationNotFoundError extends NotFoundError {
+  constructor() {
+    super("Designation");
+  }
+}
+
+export class CircularDepartmentHierarchyError extends BusinessRuleError {
+  constructor() {
+    super("A department cannot be its own ancestor. Choose a different parent department.");
+  }
+}
+
+export class DepartmentHasActiveEmployeesError extends BusinessRuleError {
+  constructor() {
+    super("This department has active employees assigned to it. Reassign them before archiving.");
+  }
+}
+
+export class DesignationHasActiveEmployeesError extends BusinessRuleError {
+  constructor() {
+    super("This designation has active employees assigned to it. Reassign them before archiving.");
+  }
+}
+
+export class BranchHasActiveEmployeesError extends BusinessRuleError {
+  constructor() {
+    super("This location has active employees assigned to it. Reassign them before archiving.");
   }
 }

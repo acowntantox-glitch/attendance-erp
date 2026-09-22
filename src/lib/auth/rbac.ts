@@ -12,16 +12,33 @@ export const ROLES: readonly Role[] = [
 ] as const;
 
 /**
- * Permission strings follow `<domain>.<action>`. Only the permissions needed to exercise the
- * Phase 1 foundation (organization CRUD) are enumerated; later phases add attendance.*,
- * device.*, report.* etc. without changing this shape.
+ * Permission strings follow `<domain>.<action>`. `organization.read`/`.manage` are legacy
+ * Phase 1 names still used by `getMyCompany`; department/designation/location/employee use the
+ * granular Phase 2 set. `employee.read/.create/.update` (Phase 1 placeholders, never referenced
+ * by any route/service) are replaced by the granular `employee.*` set below.
  */
 export const PERMISSIONS = [
   "organization.read",
   "organization.manage",
-  "employee.read",
+  "department.view",
+  "department.create",
+  "department.update",
+  "department.archive",
+  "designation.view",
+  "designation.create",
+  "designation.update",
+  "designation.archive",
+  "location.view",
+  "location.create",
+  "location.update",
+  "location.archive",
+  "employee.view",
   "employee.create",
   "employee.update",
+  "employee.archive",
+  "employee.manage_status",
+  "employee.manage_documents",
+  "employee.view_private",
   "attendance.read",
   "attendance.create",
   "attendance.correct",
@@ -36,14 +53,36 @@ export const PERMISSIONS = [
 
 export type Permission = (typeof PERMISSIONS)[number];
 
+const ORG_STRUCTURE_FULL: Permission[] = [
+  "department.view",
+  "department.create",
+  "department.update",
+  "department.archive",
+  "designation.view",
+  "designation.create",
+  "designation.update",
+  "designation.archive",
+  "location.view",
+  "location.create",
+  "location.update",
+  "location.archive",
+];
+
+const ORG_STRUCTURE_VIEW_ONLY: Permission[] = ["department.view", "designation.view", "location.view"];
+
 const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
   SUPER_ADMIN: [...PERMISSIONS],
   COMPANY_ADMIN: [...PERMISSIONS],
   HR_ADMIN: [
     "organization.read",
-    "employee.read",
+    ...ORG_STRUCTURE_FULL,
+    "employee.view",
     "employee.create",
     "employee.update",
+    "employee.archive",
+    "employee.manage_status",
+    "employee.manage_documents",
+    "employee.view_private",
     "attendance.read",
     "attendance.correct",
     "attendance.approve",
@@ -56,17 +95,46 @@ const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
   ],
   HR_MANAGER: [
     "organization.read",
-    "employee.read",
+    "department.view",
+    "department.create",
+    "department.update",
+    "designation.view",
+    "designation.create",
+    "designation.update",
+    "location.view",
+    "employee.view",
     "employee.create",
     "employee.update",
+    "employee.manage_status",
+    "employee.manage_documents",
+    "employee.view_private",
     "attendance.read",
     "attendance.correct",
     "attendance.approve",
     "schedule.read",
     "report.read",
   ],
-  MANAGER: ["organization.read", "employee.read", "attendance.read", "attendance.approve", "report.read"],
-  EMPLOYEE: ["attendance.read", "attendance.create"],
+  MANAGER: [
+    "organization.read",
+    ...ORG_STRUCTURE_VIEW_ONLY,
+    "employee.view",
+    // A line manager can update basic employment info for their team (e.g. department/location)
+    // but employment status changes (suspension, termination, ...) are deliberately HR-only —
+    // hence employee.update without employee.manage_status.
+    "employee.update",
+    "attendance.read",
+    "attendance.approve",
+    "report.read",
+  ],
+  // organization.read is the exception, not a gap: it's what the dashboard layout uses to show
+  // *your own* company's name/timezone in the header — not sensitive, and every authenticated
+  // user needs it just to use the app at all. (Found via live testing: without this, an
+  // EMPLOYEE-role login threw AuthorizationError on every page, since DashboardLayout calls
+  // getMyCompany() unconditionally — a pre-existing gap from Phase 1, not introduced here.)
+  // Self-view of one's own *employee* record is handled entirely by the service-layer bypass
+  // (see domains/employee/service.ts), not by a permission grant, per the Phase 2 self-service
+  // requirement — hence no employee.* grant here.
+  EMPLOYEE: ["organization.read", "attendance.read", "attendance.create"],
 };
 
 export function can(role: Role, permission: Permission): boolean {

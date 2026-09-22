@@ -5,6 +5,16 @@ const envSchema = z.object({
   SESSION_SECRET: z.string().min(32, "SESSION_SECRET must be at least 32 characters"),
   APP_URL: z.url(),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+
+  // Optional — document storage isn't provisioned yet. `src/lib/storage` throws a clear
+  // StorageNotConfiguredError at call-time if these are unset, rather than failing app boot, so
+  // the rest of Phase 2 stays buildable/testable without a real bucket.
+  S3_BUCKET: z.string().min(1).optional(),
+  S3_REGION: z.string().min(1).optional(),
+  S3_ENDPOINT: z.url().optional(),
+  S3_ACCESS_KEY_ID: z.string().min(1).optional(),
+  S3_SECRET_ACCESS_KEY: z.string().min(1).optional(),
+  S3_FORCE_PATH_STYLE: z.coerce.boolean().default(false),
 });
 
 export type Env = z.infer<typeof envSchema>;

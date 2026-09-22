@@ -1,0 +1,1 @@
+ALTER TABLE "employee_onboarding" DROP COLUMN "status";

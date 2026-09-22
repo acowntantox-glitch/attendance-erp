@@ -1,5 +1,9 @@
 import { cookies, headers } from "next/headers";
 import { AuthenticationError, AuthorizationError } from "@/lib/errors";
+// A per-request lookup, not cached on the session row — acceptable at current scale; if this
+// becomes a hot path, the next step is storing employeeId on the session at login/link time
+// instead of resolving it here on every request.
+import { employeeRepository } from "@/domains/employee/repository";
 import { SESSION_COOKIE_NAME, validateSessionToken } from "./session";
 import { can, type Permission, type Role } from "./rbac";
 
@@ -9,7 +13,6 @@ export type RequestContext = {
   userEmail: string;
   companyId: string;
   role: Role;
-  /** Populated once the Employee domain exists; every workforce-facing request will need it. */
   employeeId: string | null;
 };
 
@@ -38,13 +41,15 @@ export async function getRequestContext(): Promise<RequestContext> {
   const headerStore = await headers();
   const requestId = headerStore.get("x-request-id") ?? crypto.randomUUID();
 
+  const employee = await employeeRepository.findByUserId(session.company.companyId, session.user.id);
+
   return {
     requestId,
     userId: session.user.id,
     userEmail: session.user.email,
     companyId: session.company.companyId,
     role: session.company.role,
-    employeeId: null,
+    employeeId: employee?.id ?? null,
   };
 }
 
