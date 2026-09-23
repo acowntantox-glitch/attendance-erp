@@ -4,6 +4,13 @@ import { getRequestContext } from "@/lib/auth/request-context";
 import { can } from "@/lib/auth/rbac";
 import { getEmployee, getOnboarding, listEmployeeDocuments, listEmployeeHistory } from "@/domains/employee/service";
 import { EmployeeNotFoundError } from "@/domains/employee/errors";
+import {
+  getCompanyDefaultWeeklyOff,
+  getEmployeeWeeklyOffOverride,
+  listEmployeeScheduleAssignments,
+  listShifts,
+  listWorkSchedules,
+} from "@/domains/workforce/service";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -11,6 +18,8 @@ import { EmployeeStatusBadge } from "@/components/employees/employee-status-badg
 import { EmployeeHistoryTimeline } from "@/components/employees/employee-history-timeline";
 import { EmployeeOnboardingChecklist } from "@/components/employees/employee-onboarding-checklist";
 import { EmployeeDocumentsPanel } from "@/components/employees/employee-documents-panel";
+import { EmployeeSchedulePanel } from "@/components/workforce/employee-schedule-panel";
+import { EmployeeWeeklyOffPanel } from "@/components/workforce/employee-weekly-off-panel";
 
 function Field({ label, value }: { label: string; value: string | null | undefined }) {
   return (
@@ -33,14 +42,24 @@ export default async function EmployeeProfilePage({ params }: { params: Promise<
     throw error;
   }
 
-  const [history, onboarding, documents] = await Promise.all([
-    listEmployeeHistory(ctx, id),
-    getOnboarding(ctx, id),
-    listEmployeeDocuments(ctx, id),
-  ]);
-
   const canEdit = can(ctx.role, "employee.update");
   const canManageDocuments = can(ctx.role, "employee.manage_documents");
+  const canCreateAssignment = can(ctx.role, "employee_schedule.create");
+  const canViewCompanyWeeklyOffDefault = can(ctx.role, "weekly_off.view");
+  const canManageWeeklyOffOverride = can(ctx.role, "weekly_off.create");
+
+  const [history, onboarding, documents, scheduleAssignments, weeklyOffOverride, companyDefaultWeeklyOff, workSchedules, shifts] =
+    await Promise.all([
+      listEmployeeHistory(ctx, id),
+      getOnboarding(ctx, id),
+      listEmployeeDocuments(ctx, id),
+      listEmployeeScheduleAssignments(ctx, id),
+      getEmployeeWeeklyOffOverride(ctx, id),
+      canViewCompanyWeeklyOffDefault ? getCompanyDefaultWeeklyOff(ctx) : Promise.resolve(null),
+      canCreateAssignment ? listWorkSchedules(ctx) : Promise.resolve([]),
+      canCreateAssignment ? listShifts(ctx) : Promise.resolve([]),
+    ]);
+  const today = new Date().toISOString().slice(0, 10);
 
   return (
     <div className="space-y-6">
@@ -70,6 +89,7 @@ export default async function EmployeeProfilePage({ params }: { params: Promise<
           <TabsTrigger value="documents">Documents</TabsTrigger>
           <TabsTrigger value="history">History</TabsTrigger>
           <TabsTrigger value="onboarding">Onboarding</TabsTrigger>
+          <TabsTrigger value="workforce">Workforce</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview">
@@ -162,6 +182,49 @@ export default async function EmployeeProfilePage({ params }: { params: Promise<
               />
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="workforce">
+          <div className="space-y-6">
+            {can(ctx.role, "workforce_calendar.view") && (
+              <div className="flex justify-end">
+                <Link href={`/workforce/calendar?employeeId=${employee.id}`} className="text-sm text-blue-700 hover:underline">
+                  View Workforce Calendar →
+                </Link>
+              </div>
+            )}
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Schedule Assignment</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <EmployeeSchedulePanel
+                  employeeId={employee.id}
+                  assignments={scheduleAssignments}
+                  workSchedules={workSchedules}
+                  shifts={shifts}
+                  canCreate={canCreateAssignment}
+                  today={today}
+                />
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Weekly Off</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <EmployeeWeeklyOffPanel
+                  employeeId={employee.id}
+                  override={weeklyOffOverride}
+                  companyDefault={companyDefaultWeeklyOff}
+                  canViewCompanyDefault={canViewCompanyWeeklyOffDefault}
+                  canManage={canManageWeeklyOffOverride}
+                />
+              </CardContent>
+            </Card>
+          </div>
         </TabsContent>
       </Tabs>
     </div>

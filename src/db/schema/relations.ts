@@ -3,6 +3,7 @@ import { branches, companies, departments, designations, locations } from "./org
 import { companyMemberships, sessions, users } from "./auth";
 import { auditLogs } from "./audit";
 import { employeeDocuments, employeeHistory, employeeOnboarding, employeeOnboardingTasks, employees } from "./employee";
+import { employeeScheduleAssignments, holidays, shifts, weeklyOffRules, workSchedules } from "./workforce";
 
 export const companiesRelations = relations(companies, ({ many }) => ({
   branches: many(branches),
@@ -11,12 +12,17 @@ export const companiesRelations = relations(companies, ({ many }) => ({
   locations: many(locations),
   memberships: many(companyMemberships),
   employees: many(employees),
+  workSchedules: many(workSchedules),
+  shifts: many(shifts),
+  holidays: many(holidays),
+  weeklyOffRules: many(weeklyOffRules),
 }));
 
 export const branchesRelations = relations(branches, ({ one, many }) => ({
   company: one(companies, { fields: [branches.companyId], references: [companies.id] }),
   locations: many(locations),
   employees: many(employees),
+  holidays: many(holidays),
 }));
 
 export const departmentsRelations = relations(departments, ({ one, many }) => ({
@@ -63,6 +69,40 @@ export const employeesRelations = relations(employees, ({ one, many }) => ({
     references: [employeeOnboarding.employeeId],
   }),
   documents: many(employeeDocuments),
+  scheduleAssignments: many(employeeScheduleAssignments),
+  weeklyOffRules: many(weeklyOffRules),
+}));
+
+export const workSchedulesRelations = relations(workSchedules, ({ one, many }) => ({
+  company: one(companies, { fields: [workSchedules.companyId], references: [companies.id] }),
+  assignments: many(employeeScheduleAssignments),
+}));
+
+export const shiftsRelations = relations(shifts, ({ one, many }) => ({
+  company: one(companies, { fields: [shifts.companyId], references: [companies.id] }),
+  assignments: many(employeeScheduleAssignments),
+}));
+
+export const employeeScheduleAssignmentsRelations = relations(employeeScheduleAssignments, ({ one }) => ({
+  company: one(companies, { fields: [employeeScheduleAssignments.companyId], references: [companies.id] }),
+  employee: one(employees, { fields: [employeeScheduleAssignments.employeeId], references: [employees.id] }),
+  workSchedule: one(workSchedules, {
+    fields: [employeeScheduleAssignments.workScheduleId],
+    references: [workSchedules.id],
+  }),
+  shift: one(shifts, { fields: [employeeScheduleAssignments.shiftId], references: [shifts.id] }),
+  assignedBy: one(users, { fields: [employeeScheduleAssignments.assignedByUserId], references: [users.id] }),
+}));
+
+export const weeklyOffRulesRelations = relations(weeklyOffRules, ({ one }) => ({
+  company: one(companies, { fields: [weeklyOffRules.companyId], references: [companies.id] }),
+  employee: one(employees, { fields: [weeklyOffRules.employeeId], references: [employees.id] }),
+}));
+
+export const holidaysRelations = relations(holidays, ({ one }) => ({
+  company: one(companies, { fields: [holidays.companyId], references: [companies.id] }),
+  branch: one(branches, { fields: [holidays.branchId], references: [branches.id] }),
+  createdBy: one(users, { fields: [holidays.createdByUserId], references: [users.id] }),
 }));
 
 export const employeeDocumentsRelations = relations(employeeDocuments, ({ one }) => ({

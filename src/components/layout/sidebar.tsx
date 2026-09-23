@@ -16,7 +16,10 @@ const NAV_ITEMS: { href: string; label: string; permission: Permission | null }[
   { href: "/dashboard", label: "Dashboard", permission: null },
   { href: "/organization", label: "Organization", permission: "location.view" },
   { href: "/employees", label: "Employees", permission: "employee.view" },
-  { href: "/workforce", label: "Workforce", permission: null },
+  // Gated on workforce_dashboard.view since that's what every screen under /workforce currently
+  // requires (dashboard, schedules, shifts). Revisit once a later batch adds screens an EMPLOYEE
+  // can reach via workforce_calendar.view alone (e.g. their own calendar) without the dashboard permission.
+  { href: "/workforce", label: "Workforce", permission: "workforce_dashboard.view" },
   { href: "/attendance", label: "Attendance", permission: null },
   { href: "/devices", label: "Devices", permission: null },
   { href: "/reports", label: "Reports", permission: "report.read" },

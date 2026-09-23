@@ -43,8 +43,26 @@ export const PERMISSIONS = [
   "attendance.create",
   "attendance.correct",
   "attendance.approve",
-  "schedule.read",
-  "schedule.manage",
+  "schedule.view",
+  "schedule.create",
+  "schedule.update",
+  "schedule.archive",
+  "shift.view",
+  "shift.create",
+  "shift.update",
+  "shift.archive",
+  "employee_schedule.view",
+  "employee_schedule.create",
+  "employee_schedule.update",
+  "weekly_off.view",
+  "weekly_off.create",
+  "weekly_off.update",
+  "holiday.view",
+  "holiday.create",
+  "holiday.update",
+  "holiday.archive",
+  "workforce_calendar.view",
+  "workforce_dashboard.view",
   "device.read",
   "device.manage",
   "report.read",
@@ -70,6 +88,46 @@ const ORG_STRUCTURE_FULL: Permission[] = [
 
 const ORG_STRUCTURE_VIEW_ONLY: Permission[] = ["department.view", "designation.view", "location.view"];
 
+// Schedules/shifts are admin-defined templates, so they follow the same "full for HR_ADMIN, no
+// archive for HR_MANAGER, view-only for MANAGER, no grant for EMPLOYEE" shape as org-structure
+// entities above. Holidays are the deliberate exception (see WORKFORCE_HOLIDAY_* below) — they're
+// calendar information every employee needs, not management config.
+const WORKFORCE_TEMPLATE_FULL: Permission[] = [
+  "schedule.view",
+  "schedule.create",
+  "schedule.update",
+  "schedule.archive",
+  "shift.view",
+  "shift.create",
+  "shift.update",
+  "shift.archive",
+];
+const WORKFORCE_TEMPLATE_MANAGE_NO_ARCHIVE: Permission[] = [
+  "schedule.view",
+  "schedule.create",
+  "schedule.update",
+  "shift.view",
+  "shift.create",
+  "shift.update",
+];
+const WORKFORCE_TEMPLATE_VIEW_ONLY: Permission[] = ["schedule.view", "shift.view"];
+
+// employee_schedule.* / weekly_off.* are never granted to EMPLOYEE — an employee sees their own
+// via the service-layer self-view bypass (ctx.employeeId === employeeId), the same pattern
+// domains/employee/service.ts already uses for self-viewing one's own employee record.
+const WORKFORCE_ASSIGNMENT_FULL: Permission[] = [
+  "employee_schedule.view",
+  "employee_schedule.create",
+  "employee_schedule.update",
+  "weekly_off.view",
+  "weekly_off.create",
+  "weekly_off.update",
+];
+const WORKFORCE_ASSIGNMENT_VIEW_ONLY: Permission[] = ["employee_schedule.view", "weekly_off.view"];
+
+const WORKFORCE_HOLIDAY_FULL: Permission[] = ["holiday.view", "holiday.create", "holiday.update", "holiday.archive"];
+const WORKFORCE_HOLIDAY_MANAGE_NO_ARCHIVE: Permission[] = ["holiday.view", "holiday.create", "holiday.update"];
+
 const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
   SUPER_ADMIN: [...PERMISSIONS],
   COMPANY_ADMIN: [...PERMISSIONS],
@@ -86,8 +144,11 @@ const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "attendance.read",
     "attendance.correct",
     "attendance.approve",
-    "schedule.read",
-    "schedule.manage",
+    ...WORKFORCE_TEMPLATE_FULL,
+    ...WORKFORCE_ASSIGNMENT_FULL,
+    ...WORKFORCE_HOLIDAY_FULL,
+    "workforce_calendar.view",
+    "workforce_dashboard.view",
     "device.read",
     "device.manage",
     "report.read",
@@ -111,7 +172,11 @@ const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "attendance.read",
     "attendance.correct",
     "attendance.approve",
-    "schedule.read",
+    ...WORKFORCE_TEMPLATE_MANAGE_NO_ARCHIVE,
+    ...WORKFORCE_ASSIGNMENT_FULL,
+    ...WORKFORCE_HOLIDAY_MANAGE_NO_ARCHIVE,
+    "workforce_calendar.view",
+    "workforce_dashboard.view",
     "report.read",
   ],
   MANAGER: [
@@ -124,6 +189,11 @@ const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "employee.update",
     "attendance.read",
     "attendance.approve",
+    ...WORKFORCE_TEMPLATE_VIEW_ONLY,
+    ...WORKFORCE_ASSIGNMENT_VIEW_ONLY,
+    "holiday.view",
+    "workforce_calendar.view",
+    "workforce_dashboard.view",
     "report.read",
   ],
   // organization.read is the exception, not a gap: it's what the dashboard layout uses to show
@@ -133,8 +203,20 @@ const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
   // getMyCompany() unconditionally — a pre-existing gap from Phase 1, not introduced here.)
   // Self-view of one's own *employee* record is handled entirely by the service-layer bypass
   // (see domains/employee/service.ts), not by a permission grant, per the Phase 2 self-service
-  // requirement — hence no employee.* grant here.
-  EMPLOYEE: ["organization.read", "attendance.read", "attendance.create"],
+  // requirement — hence no employee.* grant here. The same bypass pattern covers an employee's
+  // own schedule assignment and weekly-off override (see domains/workforce/service.ts) — no
+  // employee_schedule.*/weekly_off.* grant here either.
+  // holiday.view IS granted directly (not via a bypass): holidays are company-wide calendar
+  // information every employee needs, unlike schedule/shift templates which are management
+  // config. workforce_calendar.view is also granted, but the service layer forces
+  // employeeId = ctx.employeeId for this role so an EMPLOYEE can only ever see their own day.
+  EMPLOYEE: [
+    "organization.read",
+    "attendance.read",
+    "attendance.create",
+    "holiday.view",
+    "workforce_calendar.view",
+  ],
 };
 
 export function can(role: Role, permission: Permission): boolean {

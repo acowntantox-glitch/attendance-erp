@@ -13,6 +13,13 @@ import {
 } from "../src/db/schema";
 import { hashPassword } from "../src/lib/auth/password";
 import { createEmployee } from "../src/domains/employee/service";
+import {
+  assignEmployeeSchedule,
+  createHoliday,
+  createShift,
+  createWorkSchedule,
+  setCompanyDefaultWeeklyOff,
+} from "../src/domains/workforce/service";
 import type { RequestContext } from "../src/lib/auth/request-context";
 
 const DEV_PASSWORD = "DevPassword123!";
@@ -298,6 +305,85 @@ async function main() {
   console.log(
     "  NOTE: seeded document storage_key values are placeholders with no real S3 object behind them — downloading them will fail until real storage is configured and real files are uploaded through the UI.",
   );
+
+  // Workforce Management sample data — seeded through the real service (same rationale as
+  // employee records above), so the schedule/shift validation and history logic is exercised
+  // during seeding too, not just at runtime.
+  //
+  // UAE weekends are Friday+Saturday (5, 6) — this is seed data for the demo company, not a
+  // hard-coded assumption anywhere in the workforce domain itself.
+  await setCompanyDefaultWeeklyOff(ctx, { offDays: [5, 6] });
+
+  const standardWeek = await createWorkSchedule(ctx, {
+    name: "Standard Week",
+    description: "09:00-18:00 with a 1 hour unpaid lunch break",
+    startTime: "09:00:00",
+    endTime: "18:00:00",
+    breakDurationMinutes: 60,
+    breakStartTime: "13:00:00",
+    isBreakPaid: false,
+  });
+
+  const morningShift = await createShift(ctx, {
+    name: "Morning",
+    code: "MORNING",
+    startTime: "09:00:00",
+    endTime: "18:00:00",
+    breakDurationMinutes: 60,
+    breakStartTime: "13:00:00",
+    gracePeriodMinutes: 10,
+  });
+
+  // Deliberately crosses midnight (end < start) — exercises the same cross-midnight handling
+  // Attendance will rely on later (docs/architecture/attendance-architecture.md).
+  const nightShift = await createShift(ctx, {
+    name: "Night",
+    code: "NIGHT",
+    startTime: "22:00:00",
+    endTime: "06:00:00",
+    breakDurationMinutes: 30,
+    breakStartTime: "02:00:00",
+    gracePeriodMinutes: 10,
+  });
+
+  await assignEmployeeSchedule(ctx, eve.id, {
+    workScheduleId: standardWeek.id,
+    shiftId: morningShift.id,
+    effectiveFrom: eve.dateOfJoining,
+  });
+  await assignEmployeeSchedule(ctx, mona.id, { workScheduleId: standardWeek.id, effectiveFrom: mona.dateOfJoining });
+  await assignEmployeeSchedule(ctx, hassan.id, { workScheduleId: standardWeek.id, effectiveFrom: hassan.dateOfJoining });
+  // One employee on the explicit Night shift override, so the cross-midnight path has real data
+  // behind it rather than only existing in tests.
+  await assignEmployeeSchedule(ctx, hana.id, {
+    workScheduleId: standardWeek.id,
+    shiftId: nightShift.id,
+    effectiveFrom: hana.dateOfJoining,
+  });
+
+  console.log("  Seeded 1 work schedule, 2 shifts (incl. a cross-midnight Night shift), and 4 employee schedule assignments");
+
+  const currentYear = new Date().getUTCFullYear();
+  await createHoliday(ctx, {
+    name: "New Year's Day",
+    date: `${currentYear + 1}-01-01`,
+    holidayType: "PUBLIC",
+    description: "Company-wide public holiday.",
+  });
+  await createHoliday(ctx, {
+    name: "UAE National Day",
+    date: `${currentYear}-12-02`,
+    holidayType: "PUBLIC",
+    description: "Company-wide public holiday.",
+  });
+  await createHoliday(ctx, {
+    branchId: hqBranch.id,
+    name: "Head Office Maintenance Day",
+    date: `${currentYear}-11-15`,
+    holidayType: "COMPANY",
+    description: "Branch-scoped holiday — Head Office only, demonstrates the branch-scoped holiday path.",
+  });
+  console.log("  Seeded 3 holidays (2 company-wide, 1 branch-scoped)");
 
   console.log("Seed complete.");
   await pool.end();
