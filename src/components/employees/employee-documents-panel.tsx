@@ -59,40 +59,47 @@ export function EmployeeDocumentsPanel({
     setSubmitting(true);
     setError(null);
 
-    const initiateResponse = await fetch(`/api/employees/${employeeId}/documents`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        documentType,
-        title: title || file.name,
-        originalFilename: file.name,
-        mimeType: file.type || "application/octet-stream",
-        sizeBytes: file.size,
-        issueDate: issueDate || undefined,
-        expiryDate: expiryDate || undefined,
-      }),
-    });
+    try {
+      const initiateResponse = await fetch(`/api/employees/${employeeId}/documents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          documentType,
+          title: title || file.name,
+          originalFilename: file.name,
+          mimeType: file.type || "application/octet-stream",
+          sizeBytes: file.size,
+          issueDate: issueDate || undefined,
+          expiryDate: expiryDate || undefined,
+        }),
+      });
 
-    if (!initiateResponse.ok) {
-      const body = await initiateResponse.json().catch(() => null);
-      setError(body?.error?.message ?? "Unable to start the upload.");
-      setSubmitting(false);
-      return;
-    }
+      if (!initiateResponse.ok) {
+        const body = await initiateResponse.json().catch(() => null);
+        setError(body?.error?.message ?? "Unable to start the upload.");
+        return;
+      }
 
-    const { data } = await initiateResponse.json();
-    const putResponse = await fetch(data.uploadUrl, { method: "PUT", body: file, headers: { "Content-Type": file.type } });
-    if (!putResponse.ok) {
+      const { data } = await initiateResponse.json();
+      const putResponse = await fetch(data.uploadUrl, {
+        method: "PUT",
+        body: file,
+        headers: { "Content-Type": file.type || "application/octet-stream" },
+      });
+      if (!putResponse.ok) {
+        setError("The file could not be uploaded to storage.");
+        return;
+      }
+
+      setOpen(false);
+      setFile(null);
+      setTitle("");
+      router.refresh();
+    } catch {
       setError("The file could not be uploaded to storage.");
+    } finally {
       setSubmitting(false);
-      return;
     }
-
-    setSubmitting(false);
-    setOpen(false);
-    setFile(null);
-    setTitle("");
-    router.refresh();
   }
 
   async function handleArchive(documentId: string) {

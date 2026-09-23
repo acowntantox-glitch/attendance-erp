@@ -18,6 +18,7 @@ export function getS3Client(): S3Client | null {
       region: env.S3_REGION,
       endpoint: env.S3_ENDPOINT,
       forcePathStyle: env.S3_FORCE_PATH_STYLE,
+      requestChecksumCalculation: "WHEN_REQUIRED",
       credentials: {
         accessKeyId: env.S3_ACCESS_KEY_ID!,
         secretAccessKey: env.S3_SECRET_ACCESS_KEY!,
