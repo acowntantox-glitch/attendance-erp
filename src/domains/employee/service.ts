@@ -170,6 +170,15 @@ export async function listEmployees(ctx: RequestContext, filters: EmployeeListFi
   };
 }
 
+/** Lightweight "Employee" filter dropdown source (Batch 6 attendance reports) — not the full
+ *  paginated `listEmployees` result, just enough to populate a `<select>`. */
+export async function listActiveEmployeesForDropdown(
+  ctx: RequestContext,
+): Promise<{ id: string; employeeNumber: string; firstName: string; lastName: string }[]> {
+  requirePermission(ctx, "employee.view");
+  return employeeRepository.listActiveForDropdown(ctx.companyId);
+}
+
 export async function getEmployee(ctx: RequestContext, employeeId: string): Promise<EmployeeWithRelations> {
   const employee = await employeeRepository.findByIdWithRelations(employeeId);
   if (!employee) throw new EmployeeNotFoundError();

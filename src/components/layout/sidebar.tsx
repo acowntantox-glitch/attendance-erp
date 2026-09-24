@@ -62,6 +62,61 @@ export function Sidebar({ role }: { role: Role }) {
             My Profile
           </Link>
         )}
+        {/* EMPLOYEE already holds attendance.view for its own /attendance self-service page, so
+            that permission alone can't gate this link the way NAV_ITEMS does above — it's excluded
+            by role explicitly instead (the dashboard page and service both enforce this too). */}
+        {role !== "EMPLOYEE" && can(role, "attendance.view") && (
+          <Link
+            href="/attendance/dashboard"
+            className={cn(
+              "block rounded-md px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900",
+              activePath.startsWith("/attendance/dashboard") && "bg-blue-50 text-blue-700 hover:bg-blue-50 hover:text-blue-700",
+            )}
+          >
+            Attendance Dashboard
+          </Link>
+        )}
+        {/* Gated on attendance.report.view (Batch 6) — a dedicated permission, not `report.read`
+            (which MANAGER also holds) or `attendance.view` (which EMPLOYEE also holds): neither
+            existing permission excludes exactly "MANAGER and EMPLOYEE, but not HR", which this
+            report requires. See rbac.ts. */}
+        {can(role, "attendance.report.view") && (
+          <Link
+            href="/attendance/reports"
+            className={cn(
+              "block rounded-md px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900",
+              activePath.startsWith("/attendance/reports") && "bg-blue-50 text-blue-700 hover:bg-blue-50 hover:text-blue-700",
+            )}
+          >
+            Attendance Reports
+          </Link>
+        )}
+        {/* Batch 7 — same permission as Attendance Reports; no new permission introduced. */}
+        {can(role, "attendance.report.view") && (
+          <Link
+            href="/attendance/calendar"
+            className={cn(
+              "block rounded-md px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900",
+              activePath.startsWith("/attendance/calendar") && "bg-blue-50 text-blue-700 hover:bg-blue-50 hover:text-blue-700",
+            )}
+          >
+            Attendance Calendar
+          </Link>
+        )}
+        {/* Gated on attendance.correction.approve, not attendance.view — MANAGER holds correction
+            .request but not .approve (per the Batch 4 RBAC table), so it never sees the HR queue
+            link even though it can view attendance; the service layer enforces this independently. */}
+        {can(role, "attendance.correction.approve") && (
+          <Link
+            href="/attendance/corrections"
+            className={cn(
+              "block rounded-md px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900",
+              activePath.startsWith("/attendance/corrections") && "bg-blue-50 text-blue-700 hover:bg-blue-50 hover:text-blue-700",
+            )}
+          >
+            Attendance Corrections
+          </Link>
+        )}
       </nav>
     </aside>
   );

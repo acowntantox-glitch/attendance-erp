@@ -10,7 +10,7 @@ describe("rbac", () => {
 
   it("does not grant EMPLOYEE organization management", () => {
     expect(can("EMPLOYEE", "organization.manage")).toBe(false);
-    expect(can("EMPLOYEE", "attendance.create")).toBe(true);
+    expect(can("EMPLOYEE", "attendance.check_in")).toBe(true);
   });
 
   it("grants every role organization.read — the dashboard layout calls getMyCompany() for every authenticated user regardless of role, to show their own company's name in the header", () => {

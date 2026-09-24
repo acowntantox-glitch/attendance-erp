@@ -57,6 +57,27 @@
       "when": 1790145054741,
       "tag": "0007_grey_human_cannonball",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1790155105382,
+      "tag": "0008_broad_changeling",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790222763663,
+      "tag": "0009_strong_angel",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1790222777526,
+      "tag": "0010_cute_paladin",
+      "breakpoints": true
     }
   ]
 }

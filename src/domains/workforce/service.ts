@@ -501,6 +501,22 @@ export async function setHolidayActive(ctx: RequestContext, id: string, isActive
 // it (docs/architecture/attendance-architecture.md).
 // ---------------------------------------------------------------------------
 
+/**
+ * The same branch -> company timezone resolution chain `getWorkforceDayInfo` uses internally,
+ * exposed standalone for Attendance: it needs an employee's local calendar date (to know *which*
+ * date to ask `getWorkforceDayInfo` about) before it has any assignment/date-specific info to work
+ * with. Additive only — does not change any existing Workforce behavior.
+ */
+export async function resolveEmployeeTimezone(ctx: RequestContext, employeeId: string): Promise<string> {
+  const employee = await loadEmployeeInCompany(ctx, employeeId);
+  const [company, branch] = await Promise.all([
+    companyRepository.findById(ctx.companyId),
+    employee.locationId ? branchRepository.findById(employee.locationId) : Promise.resolve(null),
+  ]);
+  if (!company) throw new Error("Company not found for an authenticated request context.");
+  return resolveTimezone(branch?.timezone, company.timezone);
+}
+
 export async function getWorkforceDayInfo(ctx: RequestContext, employeeId: string, date: string): Promise<WorkforceDayInfo> {
   requirePermission(ctx, "workforce_calendar.view");
   // An EMPLOYEE can only ever see their own day — the permission is granted company-wide but the

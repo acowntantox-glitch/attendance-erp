@@ -1,0 +1,1 @@
+ALTER TABLE "attendance_corrections" DROP COLUMN "requested_change";

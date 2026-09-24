@@ -61,6 +61,41 @@ export const employeeRepository = {
   findById(id: string) {
     return db.query.employees.findFirst({ where: eq(employees.id, id) });
   },
+  /**
+   * Employees eligible for automated attendance processing on `workDate` (Batch 5): active,
+   * not archived — the same "active employee" convention already used by
+   * `attendanceDashboardRepository`/`workforceEmployeeRepository` — plus `dateOfJoining <=
+   * workDate` so an employee isn't materialized ABSENT for a date before they ever joined. The
+   * project's employee model has no separate "employment end date" field (only the
+   * `employmentStatus` enum), so a RESIGNED/TERMINATED employee is already excluded by the
+   * `employmentStatus === "ACTIVE"` condition below — there is no later "effective to" date to
+   * additionally respect, and this batch does not add one.
+   */
+  listEligibleForProcessing(companyId: string, workDate: string, executor: DbExecutor = db): Promise<{ id: string }[]> {
+    return executor
+      .select({ id: employees.id })
+      .from(employees)
+      .where(
+        and(
+          eq(employees.companyId, companyId),
+          eq(employees.isArchived, false),
+          eq(employees.employmentStatus, "ACTIVE"),
+          lte(employees.dateOfJoining, workDate),
+        ),
+      );
+  },
+  /** Lightweight lister for populating an "Employee" filter dropdown (Batch 6 attendance
+   *  reports) — id/number/name only, not the full `EmployeeWithRelations` shape `listByCompany`
+   *  returns, and not paginated (a company's active headcount is small enough for a plain
+   *  `<select>`; the report's separate free-text `search` filter covers larger companies). Same
+   *  "active employee" convention as `listEligibleForProcessing`. */
+  listActiveForDropdown(companyId: string, executor: DbExecutor = db): Promise<{ id: string; employeeNumber: string; firstName: string; lastName: string }[]> {
+    return executor
+      .select({ id: employees.id, employeeNumber: employees.employeeNumber, firstName: employees.firstName, lastName: employees.lastName })
+      .from(employees)
+      .where(and(eq(employees.companyId, companyId), eq(employees.isArchived, false), eq(employees.employmentStatus, "ACTIVE")))
+      .orderBy(asc(employees.firstName), asc(employees.lastName));
+  },
   findByIdWithRelations(id: string) {
     return db.query.employees.findFirst({
       where: eq(employees.id, id),

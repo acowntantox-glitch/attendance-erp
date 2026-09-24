@@ -75,6 +75,11 @@ export default async function EmployeeProfilePage({ params }: { params: Promise<
         </div>
         <div className="flex items-center gap-3">
           <EmployeeStatusBadge status={employee.employmentStatus} />
+          {can(ctx.role, "attendance.view") && (
+            <Link href={`/employees/${employee.id}/attendance`}>
+              <Button variant="secondary">Attendance</Button>
+            </Link>
+          )}
           {canEdit && (
             <Link href={`/employees/${employee.id}/edit`}>
               <Button variant="secondary">Edit</Button>

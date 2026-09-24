@@ -47,3 +47,7 @@ SESSION_SECRET=$(openssl rand -base64 48) docker compose up --build
 - All attendance capture methods converge into one Attendance Event pipeline (no method-specific tables/paths) — future phases.
 - Tenant isolation is enforced server-side only (`RequestContext` + `assertCompanyAccess`), never by trusting a client-supplied `companyId`.
 - Other domains may only import a domain's `service.ts`, never its `repository.ts`/`model.ts` internals.
+
+git add .
+git commit -m "Update project"
+git push

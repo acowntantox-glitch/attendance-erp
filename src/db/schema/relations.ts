@@ -4,6 +4,7 @@ import { companyMemberships, sessions, users } from "./auth";
 import { auditLogs } from "./audit";
 import { employeeDocuments, employeeHistory, employeeOnboarding, employeeOnboardingTasks, employees } from "./employee";
 import { employeeScheduleAssignments, holidays, shifts, weeklyOffRules, workSchedules } from "./workforce";
+import { attendanceCorrections, attendanceDailyRecords, attendanceEvents, attendanceOpenSessions } from "./attendance";
 
 export const companiesRelations = relations(companies, ({ many }) => ({
   branches: many(branches),
@@ -71,6 +72,10 @@ export const employeesRelations = relations(employees, ({ one, many }) => ({
   documents: many(employeeDocuments),
   scheduleAssignments: many(employeeScheduleAssignments),
   weeklyOffRules: many(weeklyOffRules),
+  attendanceSessions: many(attendanceOpenSessions),
+  attendanceEvents: many(attendanceEvents),
+  attendanceDailyRecords: many(attendanceDailyRecords),
+  attendanceCorrections: many(attendanceCorrections),
 }));
 
 export const workSchedulesRelations = relations(workSchedules, ({ one, many }) => ({
@@ -147,4 +152,34 @@ export const sessionsRelations = relations(sessions, ({ one }) => ({
 export const auditLogsRelations = relations(auditLogs, ({ one }) => ({
   company: one(companies, { fields: [auditLogs.companyId], references: [companies.id] }),
   actor: one(users, { fields: [auditLogs.actorUserId], references: [users.id] }),
+}));
+
+export const attendanceOpenSessionsRelations = relations(attendanceOpenSessions, ({ one, many }) => ({
+  company: one(companies, { fields: [attendanceOpenSessions.companyId], references: [companies.id] }),
+  employee: one(employees, { fields: [attendanceOpenSessions.employeeId], references: [employees.id] }),
+  expectedWorkSchedule: one(workSchedules, {
+    fields: [attendanceOpenSessions.expectedWorkScheduleId],
+    references: [workSchedules.id],
+  }),
+  expectedShift: one(shifts, { fields: [attendanceOpenSessions.expectedShiftId], references: [shifts.id] }),
+  events: many(attendanceEvents),
+}));
+
+export const attendanceEventsRelations = relations(attendanceEvents, ({ one }) => ({
+  company: one(companies, { fields: [attendanceEvents.companyId], references: [companies.id] }),
+  employee: one(employees, { fields: [attendanceEvents.employeeId], references: [employees.id] }),
+  session: one(attendanceOpenSessions, { fields: [attendanceEvents.sessionId], references: [attendanceOpenSessions.id] }),
+}));
+
+export const attendanceDailyRecordsRelations = relations(attendanceDailyRecords, ({ one }) => ({
+  company: one(companies, { fields: [attendanceDailyRecords.companyId], references: [companies.id] }),
+  employee: one(employees, { fields: [attendanceDailyRecords.employeeId], references: [employees.id] }),
+}));
+
+export const attendanceCorrectionsRelations = relations(attendanceCorrections, ({ one }) => ({
+  company: one(companies, { fields: [attendanceCorrections.companyId], references: [companies.id] }),
+  employee: one(employees, { fields: [attendanceCorrections.employeeId], references: [employees.id] }),
+  event: one(attendanceEvents, { fields: [attendanceCorrections.eventId], references: [attendanceEvents.id] }),
+  requestedBy: one(users, { fields: [attendanceCorrections.requestedByUserId], references: [users.id] }),
+  reviewedBy: one(users, { fields: [attendanceCorrections.reviewedByUserId], references: [users.id] }),
 }));
