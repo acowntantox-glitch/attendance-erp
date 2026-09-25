@@ -1,6 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import type { AttendanceDailyRecord, AttendanceSessionView } from "@/domains/attendance/model";
+import type { AttendanceDayRecord, AttendanceSessionView } from "@/domains/attendance/model";
 import { TodayAttendanceCard } from "./today-attendance-card";
 import { CurrentSessionPanel } from "./current-session-panel";
 import { SessionsTable } from "./sessions-table";
@@ -22,16 +22,21 @@ export function AttendanceWorkspace({
   sessions,
   currentSession,
   hasOpenBreak,
+  periodClosed,
 }: {
   employeeId: string;
   canControl: boolean;
   canRequestCorrection: boolean;
   employeeTimezone: string;
   workDate: string;
-  record: AttendanceDailyRecord;
+  record: AttendanceDayRecord;
   sessions: AttendanceSessionView[];
   currentSession: AttendanceSessionView | null;
   hasOpenBreak: boolean;
+  /** Whether `workDate`'s month is closed (Batch 8). The server independently rejects the
+   *  underlying mutations either way — this only lets the controls explain themselves instead of
+   *  failing with an error toast after the fact. */
+  periodClosed: boolean;
 }) {
   const referenceSession = sessions[0] ?? currentSession ?? null;
 
@@ -47,7 +52,13 @@ export function AttendanceWorkspace({
         <div className="space-y-6">
           {/* Current-session state is always shown — canControl only hides the action buttons
               inside, so an HR/authorized viewer still sees "checked in"/"on break" state. */}
-          <CurrentSessionPanel employeeId={employeeId} canControl={canControl} session={currentSession} hasOpenBreak={hasOpenBreak} />
+          <CurrentSessionPanel
+            employeeId={employeeId}
+            canControl={canControl}
+            session={currentSession}
+            hasOpenBreak={hasOpenBreak}
+            periodClosed={periodClosed}
+          />
 
           <TodayAttendanceCard workDate={workDate} record={record} referenceSession={referenceSession} />
 

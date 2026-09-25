@@ -34,11 +34,13 @@ export function CurrentSessionPanel({
   canControl,
   session,
   hasOpenBreak,
+  periodClosed,
 }: {
   employeeId: string;
   canControl: boolean;
   session: AttendanceSessionView | null;
   hasOpenBreak: boolean;
+  periodClosed: boolean;
 }) {
   const router = useRouter();
   // Which action is currently in flight, if any — not just a shared boolean, so a button never
@@ -46,6 +48,9 @@ export function CurrentSessionPanel({
   const [pendingAction, setPendingAction] = useState<Action | null>(null);
   const [error, setError] = useState<string | null>(null);
   const submitting = pendingAction !== null;
+  // The server independently rejects check-in/out/break mutations for a closed period (§4) — this
+  // just keeps the buttons from being clickable and confusing when that's already known client-side.
+  const controlsEnabled = canControl && !periodClosed;
 
   async function perform(action: Action) {
     if (submitting) return; // prevent accidental double submission from a fast double-click
@@ -81,11 +86,21 @@ export function CurrentSessionPanel({
           </div>
         )}
 
+        {periodClosed && canControl && (
+          <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+            This month&apos;s attendance period is closed, so check-in, check-out, and break actions are unavailable for it.
+          </p>
+        )}
+
         {!session ? (
           <div className="flex items-center justify-between">
             <p className="text-sm text-slate-500">You are not currently checked in.</p>
             {canControl && (
-              <Button onClick={() => perform("check-in")} disabled={submitting} aria-busy={pendingAction === "check-in"}>
+              <Button
+                onClick={() => perform("check-in")}
+                disabled={submitting || !controlsEnabled}
+                aria-busy={pendingAction === "check-in"}
+              >
                 {pendingAction === "check-in" ? "Checking in…" : "Check In"}
               </Button>
             )}
@@ -109,14 +124,19 @@ export function CurrentSessionPanel({
             {canControl && (
               <div className="flex flex-wrap gap-2">
                 {hasOpenBreak ? (
-                  <Button variant="secondary" onClick={() => perform("break-end")} disabled={submitting} aria-busy={pendingAction === "break-end"}>
+                  <Button
+                    variant="secondary"
+                    onClick={() => perform("break-end")}
+                    disabled={submitting || !controlsEnabled}
+                    aria-busy={pendingAction === "break-end"}
+                  >
                     {pendingAction === "break-end" ? "Ending break…" : "End Break"}
                   </Button>
                 ) : (
                   <Button
                     variant="secondary"
                     onClick={() => perform("break-start")}
-                    disabled={submitting}
+                    disabled={submitting || !controlsEnabled}
                     aria-busy={pendingAction === "break-start"}
                   >
                     {pendingAction === "break-start" ? "Starting break…" : "Start Break"}
@@ -125,7 +145,7 @@ export function CurrentSessionPanel({
                 <Button
                   variant="danger"
                   onClick={() => perform("check-out")}
-                  disabled={submitting || hasOpenBreak}
+                  disabled={submitting || hasOpenBreak || !controlsEnabled}
                   aria-busy={pendingAction === "check-out"}
                   title={hasOpenBreak ? "End your break first" : undefined}
                 >

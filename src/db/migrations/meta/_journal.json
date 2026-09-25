@@ -78,6 +78,20 @@
       "when": 1790222777526,
       "tag": "0010_cute_paladin",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1790241034573,
+      "tag": "0011_needy_blizzard",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1790266675559,
+      "tag": "0012_foamy_bruce_banner",
+      "breakpoints": true
     }
   ]
 }

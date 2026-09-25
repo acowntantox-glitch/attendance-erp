@@ -19,6 +19,17 @@ export type AttendanceSessionWithSchedule = AttendanceSession & {
   expectedShift: Shift | null;
 };
 
+/** One break interval within a session, exactly as `attendanceEventRepository.listBreaksForSession`
+ *  derives it from the immutable event stream — `endAt: null` for a still-open break.
+ *  `startEventId`/`endEventId` let a BREAK_START/BREAK_END correction (Batch 4) identify which
+ *  break it targets; display code should treat them as opaque ids, never re-derive them. */
+export type SessionBreakInterval = {
+  startAt: Date;
+  endAt: Date | null;
+  startEventId: string | null;
+  endEventId: string | null;
+};
+
 /**
  * A session enriched with its own gross duration/break minutes — UI display convenience only,
  * computed server-side by reusing `calculation.ts`'s `diffMinutes`/`closedBreakMinutes` (plain
@@ -26,14 +37,40 @@ export type AttendanceSessionWithSchedule = AttendanceSession & {
  * normalization/precedence logic). `sessionWorkedMinutes` is null while the session is still OPEN
  * — never fabricated. These fields are NOT authoritative totals: the day's real `workedMinutes`/
  * `overtimeMinutes`/etc. always come from `AttendanceDailyRecord`, never summed from these.
+ * `breaks` (Batch 9) is the same interval list `sessionBreakMinutes` was already summed from —
+ * `toSessionView` fetches it once and keeps both, never a second `listBreaksForSession` call.
  */
 export type AttendanceSessionView = AttendanceSessionWithSchedule & {
   sessionBreakMinutes: number;
   sessionWorkedMinutes: number | null;
+  breaks: SessionBreakInterval[];
 };
 
 export type AttendanceEvent = typeof attendanceEvents.$inferSelect;
 export type AttendanceDailyRecord = typeof attendanceDailyRecords.$inferSelect;
+
+/**
+ * Batch 8 — `getAttendanceDay`'s synthetic, non-persisted stand-in for "no daily record exists,
+ * and the period is closed so one must not be lazily materialized" (see `assertAttendancePeriodOpen`'s
+ * module doc and `getAttendanceDay` in service.ts). Mirrors the calendar's existing synthetic
+ * `"UNPROCESSED"` cell status (`AttendanceCalendarCellStatus` in
+ * `calendar/attendance-calendar.service.ts`) — same meaning, same string literal, independently
+ * defined here rather than imported to avoid a reverse dependency from this shared model module
+ * onto the calendar submodule. `id`/`calculatedAt`/`createdAt`/`updatedAt` are `null` because no
+ * row actually exists; every other field mirrors `AttendanceDailyRecord`'s own type exactly.
+ */
+export type UnprocessedAttendanceDayRecord = Omit<AttendanceDailyRecord, "id" | "status" | "calculatedAt" | "createdAt" | "updatedAt"> & {
+  id: null;
+  status: "UNPROCESSED";
+  calculatedAt: null;
+  createdAt: null;
+  updatedAt: null;
+};
+
+/** `getAttendanceDay`'s return type for a single day — either a real persisted record, or the
+ *  synthetic unprocessed stand-in above. Never widened onto any other attendance read path. */
+export type AttendanceDayRecord = AttendanceDailyRecord | UnprocessedAttendanceDayRecord;
+
 export type AttendanceCorrection = typeof attendanceCorrections.$inferSelect;
 export type AttendanceEventType = (typeof attendanceEventTypeEnum.enumValues)[number];
 export type AttendanceSource = (typeof attendanceSourceEnum.enumValues)[number];

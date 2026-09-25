@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { getRequestContext } from "@/lib/auth/request-context";
 import { can } from "@/lib/auth/rbac";
 import { listCompanyCorrections } from "@/domains/attendance/service";
+import { isAttendancePeriodClosed } from "@/domains/attendance/periods/attendance-period.service";
 import { getMyCompany } from "@/domains/organization/service";
 import { Card, CardContent } from "@/components/ui/card";
 import { CorrectionsStatusFilter } from "@/components/attendance/corrections/corrections-status-filter";
@@ -45,6 +46,13 @@ export default async function AttendanceCorrectionsPage({ searchParams }: { sear
     getMyCompany(ctx),
   ]);
 
+  // One closed-period lookup per distinct month present in this view, not per correction — a
+  // correction's own workDate month is what determines whether its period blocks a new review
+  // (§4/§29), not the request's creation date.
+  const distinctMonths = Array.from(new Set(corrections.map((c) => c.workDate.slice(0, 7))));
+  const closedFlags = await Promise.all(distinctMonths.map((month) => isAttendancePeriodClosed(ctx.companyId, month)));
+  const closedMonths = new Set(distinctMonths.filter((_, i) => closedFlags[i]));
+
   return (
     <div className="space-y-6">
       <div>
@@ -58,7 +66,7 @@ export default async function AttendanceCorrectionsPage({ searchParams }: { sear
 
       <Card>
         <CardContent className="p-0">
-          <HrCorrectionsTable corrections={corrections} timezone={company.timezone} />
+          <HrCorrectionsTable corrections={corrections} timezone={company.timezone} closedMonths={closedMonths} />
         </CardContent>
       </Card>
     </div>

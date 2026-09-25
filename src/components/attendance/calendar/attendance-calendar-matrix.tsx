@@ -28,30 +28,36 @@ function CalendarCellView({
   const workedPart = cell.hasRecord && cell.workedMinutes !== null ? ` — ${formatMinutesOrNull(cell.workedMinutes)} worked` : "";
   const accessibleLabel = `${employeeName} — ${cell.date} — ${statusWord}${workedPart}`;
 
-  const content = (
-    <span
-      title={accessibleLabel}
-      aria-label={accessibleLabel}
-      className={cn(
-        "flex h-8 w-10 items-center justify-center rounded text-xs font-medium",
-        cell.status === "UNPROCESSED" ? "text-slate-300" : "text-slate-700",
-        cell.status === "ABSENT" && "bg-red-50 text-red-700",
-        cell.status === "LATE" && "bg-amber-50 text-amber-700",
-        (cell.status === "PRESENT" || cell.status === "WEEKLY_OFF_WORKED" || cell.status === "HOLIDAY_WORKED") && "bg-green-50 text-green-700",
-        cell.status === "INCOMPLETE" && "bg-amber-50 text-amber-700",
-      )}
-    >
-      {shortLabel}
-    </span>
+  // Labeled on exactly one element — the outer interactive one when there is a real record to
+  // link to, otherwise the span itself — never both, which would double-announce the same name
+  // to assistive tech.
+  const badgeClassName = cn(
+    "flex h-8 w-10 items-center justify-center rounded text-xs font-medium",
+    cell.status === "UNPROCESSED" ? "text-slate-300" : "text-slate-700",
+    cell.status === "ABSENT" && "bg-red-50 text-red-700",
+    cell.status === "LATE" && "bg-amber-50 text-amber-700",
+    (cell.status === "PRESENT" || cell.status === "WEEKLY_OFF_WORKED" || cell.status === "HOLIDAY_WORKED") && "bg-green-50 text-green-700",
+    cell.status === "INCOMPLETE" && "bg-amber-50 text-amber-700",
   );
 
   if (!cell.hasRecord) {
-    return content;
+    return (
+      <span title={accessibleLabel} aria-label={accessibleLabel} className={badgeClassName}>
+        {shortLabel}
+      </span>
+    );
   }
 
   return (
-    <Link href={`/employees/${employeeId}/attendance`} title={accessibleLabel} aria-label={accessibleLabel} className="inline-block">
-      {content}
+    <Link
+      href={`/employees/${employeeId}/attendance?date=${cell.date}`}
+      title={accessibleLabel}
+      aria-label={accessibleLabel}
+      className="inline-block"
+    >
+      <span className={badgeClassName} aria-hidden="true">
+        {shortLabel}
+      </span>
     </Link>
   );
 }

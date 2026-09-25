@@ -1,3 +1,4 @@
+import { cache } from "react";
 import type { RequestContext } from "@/lib/auth/request-context";
 import { assertCompanyAccess, requirePermission } from "@/lib/auth/request-context";
 import { isUniqueViolation } from "@/lib/errors";
@@ -41,12 +42,18 @@ import type {
   UpdateDesignationInput,
 } from "./model";
 
-export async function getMyCompany(ctx: RequestContext): Promise<Company> {
+/**
+ * Wrapped in React's `cache()` — see request-context.ts's `getRequestContext` for the same
+ * rationale. Every caller within one request passes the same `ctx` object (itself the cached
+ * result of `getRequestContext()`), so this correctly dedupes across the layout and every page
+ * without introducing any caching that outlives a single request.
+ */
+export const getMyCompany = cache(async (ctx: RequestContext): Promise<Company> => {
   requirePermission(ctx, "organization.read");
   const company = await companyRepository.findById(ctx.companyId);
   if (!company) throw new CompanyNotFoundError();
   return company;
-}
+});
 
 export async function listBranches(ctx: RequestContext): Promise<Branch[]> {
   requirePermission(ctx, "location.view");

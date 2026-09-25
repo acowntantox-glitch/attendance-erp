@@ -22,7 +22,15 @@ async function parseErrorMessage(response: Response, fallback: string): Promise<
  * computes or previews a recalculated total itself, it only tells the reviewer that approval
  * *will* trigger one server-side.
  */
-export function ReviewCorrectionDialog({ correction, timezone }: { correction: AttendanceCorrectionWithDetails; timezone: string }) {
+export function ReviewCorrectionDialog({
+  correction,
+  timezone,
+  periodClosed,
+}: {
+  correction: AttendanceCorrectionWithDetails;
+  timezone: string;
+  periodClosed: boolean;
+}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [reviewNote, setReviewNote] = useState("");
@@ -129,6 +137,13 @@ export function ReviewCorrectionDialog({ correction, timezone }: { correction: A
             )}
           </dl>
 
+          {correction.status === "PENDING" && periodClosed && (
+            <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+              The attendance period for {formatDateLabel(correction.workDate)} is closed, so this correction can&apos;t be reviewed
+              until the period is reopened.
+            </p>
+          )}
+
           {correction.status === "PENDING" && (
             <div>
               <Label htmlFor="review-note">Review note (optional)</Label>
@@ -142,10 +157,10 @@ export function ReviewCorrectionDialog({ correction, timezone }: { correction: A
 
         {correction.status === "PENDING" && (
           <DialogFooter>
-            <Button variant="danger" onClick={() => void submit("REJECT")} disabled={submitting} aria-busy={pendingAction === "REJECT"}>
+            <Button variant="danger" onClick={() => void submit("REJECT")} disabled={submitting || periodClosed} aria-busy={pendingAction === "REJECT"}>
               {pendingAction === "REJECT" ? "Rejecting…" : "Reject"}
             </Button>
-            <Button onClick={() => void submit("APPROVE")} disabled={submitting} aria-busy={pendingAction === "APPROVE"}>
+            <Button onClick={() => void submit("APPROVE")} disabled={submitting || periodClosed} aria-busy={pendingAction === "APPROVE"}>
               {pendingAction === "APPROVE" ? "Approving…" : "Approve"}
             </Button>
           </DialogFooter>

@@ -4,7 +4,14 @@ import { companyMemberships, sessions, users } from "./auth";
 import { auditLogs } from "./audit";
 import { employeeDocuments, employeeHistory, employeeOnboarding, employeeOnboardingTasks, employees } from "./employee";
 import { employeeScheduleAssignments, holidays, shifts, weeklyOffRules, workSchedules } from "./workforce";
-import { attendanceCorrections, attendanceDailyRecords, attendanceEvents, attendanceOpenSessions } from "./attendance";
+import {
+  attendanceCorrections,
+  attendanceDailyRecords,
+  attendanceEvents,
+  attendanceExceptionDismissals,
+  attendanceOpenSessions,
+  attendancePeriods,
+} from "./attendance";
 
 export const companiesRelations = relations(companies, ({ many }) => ({
   branches: many(branches),
@@ -182,4 +189,15 @@ export const attendanceCorrectionsRelations = relations(attendanceCorrections, (
   event: one(attendanceEvents, { fields: [attendanceCorrections.eventId], references: [attendanceEvents.id] }),
   requestedBy: one(users, { fields: [attendanceCorrections.requestedByUserId], references: [users.id] }),
   reviewedBy: one(users, { fields: [attendanceCorrections.reviewedByUserId], references: [users.id] }),
+}));
+
+export const attendancePeriodsRelations = relations(attendancePeriods, ({ one }) => ({
+  company: one(companies, { fields: [attendancePeriods.companyId], references: [companies.id] }),
+  closedBy: one(users, { fields: [attendancePeriods.closedByUserId], references: [users.id] }),
+}));
+
+export const attendanceExceptionDismissalsRelations = relations(attendanceExceptionDismissals, ({ one }) => ({
+  company: one(companies, { fields: [attendanceExceptionDismissals.companyId], references: [companies.id] }),
+  employee: one(employees, { fields: [attendanceExceptionDismissals.employeeId], references: [employees.id] }),
+  dismissedBy: one(users, { fields: [attendanceExceptionDismissals.dismissedByUserId], references: [users.id] }),
 }));

@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { getRequestContext } from "@/lib/auth/request-context";
 import { can } from "@/lib/auth/rbac";
 import { getAttendanceDashboard } from "@/domains/attendance/service";
+import { isAttendancePeriodClosed } from "@/domains/attendance/periods/attendance-period.service";
 import { listBranches, listDepartments } from "@/domains/organization/service";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Pagination } from "@/components/ui/pagination";
@@ -58,7 +59,7 @@ export default async function AttendanceDashboardPage({ searchParams }: { search
   const today = new Date().toISOString().slice(0, 10);
   const date = params.date && DATE_PATTERN.test(params.date) && params.date <= today ? params.date : today;
 
-  const [result, departments, branches] = await Promise.all([
+  const [result, departments, branches, periodClosed] = await Promise.all([
     getAttendanceDashboard(ctx, {
       workDate: date,
       page: Number(params.page ?? "1") || 1,
@@ -70,6 +71,7 @@ export default async function AttendanceDashboardPage({ searchParams }: { search
     }),
     listDepartments(ctx),
     listBranches(ctx),
+    isAttendancePeriodClosed(ctx.companyId, date.slice(0, 7)),
   ]);
 
   const filterParams = { search: params.search, departmentId: params.departmentId, locationId: params.locationId, status: params.status };
@@ -80,7 +82,7 @@ export default async function AttendanceDashboardPage({ searchParams }: { search
 
       <SummaryCards summary={result.summary} />
 
-      {can(ctx.role, "attendance.recalculate") && <ProcessDayButton workDate={date} />}
+      {can(ctx.role, "attendance.recalculate") && <ProcessDayButton workDate={date} periodClosed={periodClosed} />}
 
       {date === today && (
         <Card>

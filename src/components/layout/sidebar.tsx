@@ -103,6 +103,20 @@ export function Sidebar({ role }: { role: Role }) {
             Attendance Calendar
           </Link>
         )}
+        {/* Batch 10 — view gated on the same attendance.report.view as Reports/Calendar (MANAGER
+            excluded exactly as it already is from those); dismiss/undismiss on the page itself
+            are separately gated on attendance.exception.manage. */}
+        {can(role, "attendance.report.view") && (
+          <Link
+            href="/attendance/exceptions"
+            className={cn(
+              "block rounded-md px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900",
+              activePath.startsWith("/attendance/exceptions") && "bg-blue-50 text-blue-700 hover:bg-blue-50 hover:text-blue-700",
+            )}
+          >
+            Attendance Exceptions
+          </Link>
+        )}
         {/* Gated on attendance.correction.approve, not attendance.view — MANAGER holds correction
             .request but not .approve (per the Batch 4 RBAC table), so it never sees the HR queue
             link even though it can view attendance; the service layer enforces this independently. */}
@@ -115,6 +129,21 @@ export function Sidebar({ role }: { role: Role }) {
             )}
           >
             Attendance Corrections
+          </Link>
+        )}
+        {/* Batch 8 — visible to whoever holds either half of period management; currently only
+            HR_ADMIN (and implicit COMPANY_ADMIN/SUPER_ADMIN) hold either permission. Not tied to
+            attendance.report.view since period lock/unlock is a distinct capability from reading
+            reports. */}
+        {(can(role, "attendance.period.lock") || can(role, "attendance.period.unlock")) && (
+          <Link
+            href="/attendance/periods"
+            className={cn(
+              "block rounded-md px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900",
+              activePath.startsWith("/attendance/periods") && "bg-blue-50 text-blue-700 hover:bg-blue-50 hover:text-blue-700",
+            )}
+          >
+            Attendance Periods
           </Link>
         )}
       </nav>

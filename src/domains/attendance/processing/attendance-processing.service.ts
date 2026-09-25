@@ -37,7 +37,8 @@ import { EmployeeNotFoundError } from "@/domains/employee/errors";
 import { attendanceDailyStatusEnum } from "@/db/schema";
 import { recalculateDailyRecord } from "../service";
 import { attendanceDailyRecordRepository } from "../repository";
-import { EmployeeNotEligibleForProcessingError } from "../errors";
+import { AttendancePeriodLockedError, EmployeeNotEligibleForProcessingError } from "../errors";
+import { isAttendancePeriodClosed } from "../periods/attendance-period.service";
 import type { AttendanceDailyRecord, AttendanceDailyStatus } from "../model";
 
 const ALL_DAILY_STATUSES = attendanceDailyStatusEnum.enumValues;
@@ -115,6 +116,14 @@ export type ProcessCompanyDayResult = {
  */
 export async function processCompanyAttendanceDay(ctx: RequestContext, input: { workDate: string }): Promise<ProcessCompanyDayResult> {
   requirePermission(ctx, "attendance.recalculate");
+
+  // Batch 8 (§14) — a fast, non-locking upfront rejection so a closed period fails once, clearly,
+  // instead of looping over every eligible employee only to have each one's own
+  // `recalculateDailyRecord` call fail individually (which still happens too, as the real,
+  // concurrency-safe enforcement — this is purely an efficient fast path, not a substitute for it).
+  if (await isAttendancePeriodClosed(ctx.companyId, input.workDate.slice(0, 7))) {
+    throw new AttendancePeriodLockedError(input.workDate.slice(0, 7));
+  }
 
   const eligible = await employeeRepository.listEligibleForProcessing(ctx.companyId, input.workDate);
 

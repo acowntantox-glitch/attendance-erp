@@ -15,11 +15,26 @@ const SESSION_STATUS_LABEL = {
   ABANDONED: "Abandoned",
 } as const;
 
+function BreaksList({ breaks, timezone }: { breaks: AttendanceSessionView["breaks"]; timezone: string | null }) {
+  if (breaks.length === 0) return <span className="text-slate-400">None</span>;
+  return (
+    <ul className="space-y-0.5">
+      {breaks.map((b, i) => (
+        <li key={b.startEventId ?? i}>
+          {formatInstant(b.startAt, timezone)} – {b.endAt ? formatInstant(b.endAt, timezone) : <span className="text-blue-700">ongoing</span>}
+          {b.endAt && <span className="ml-1 text-slate-400">({formatMinutesOrNull(Math.round((b.endAt.getTime() - b.startAt.getTime()) / 60000))})</span>}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 /**
  * Multiple sessions per work date are expected, not an edge case (e.g. 09:00-12:00 then
  * 14:00-18:00) — every session captured for the day is listed individually. Duration is each
  * session's own `sessionWorkedMinutes`, computed server-side (see model.ts) — this table never
- * subtracts timestamps itself.
+ * subtracts timestamps itself. `breaks` (Batch 9) is the same interval list `sessionBreakMinutes`
+ * was already summed from — this table only ever displays it, never re-derives it from raw events.
  */
 export function SessionsTable({ sessions }: { sessions: AttendanceSessionView[] }) {
   if (sessions.length === 0) {
@@ -33,6 +48,7 @@ export function SessionsTable({ sessions }: { sessions: AttendanceSessionView[] 
           <TableHead>Check In</TableHead>
           <TableHead>Check Out</TableHead>
           <TableHead>Duration</TableHead>
+          <TableHead>Breaks</TableHead>
           <TableHead>Status</TableHead>
         </TableRow>
       </TableHeader>
@@ -48,6 +64,9 @@ export function SessionsTable({ sessions }: { sessions: AttendanceSessionView[] 
               )}
             </TableCell>
             <TableCell>{session.status === "OPEN" ? "In progress" : formatMinutesOrNull(session.sessionWorkedMinutes)}</TableCell>
+            <TableCell>
+              <BreaksList breaks={session.breaks} timezone={session.resolvedTimezone} />
+            </TableCell>
             <TableCell>
               <Badge variant={SESSION_STATUS_VARIANT[session.status]}>{SESSION_STATUS_LABEL[session.status]}</Badge>
               {session.status === "ABANDONED" && (

@@ -37,7 +37,7 @@ function SummaryStat({ label, value }: { label: string; value: number }) {
  * upsert is idempotent). Only rendered by the page when the caller holds
  * `attendance.recalculate` — the API route enforces this independently either way.
  */
-export function ProcessDayButton({ workDate }: { workDate: string }) {
+export function ProcessDayButton({ workDate, periodClosed }: { workDate: string; periodClosed: boolean }) {
   const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -79,13 +79,20 @@ export function ProcessDayButton({ workDate }: { workDate: string }) {
           than once.
         </p>
 
+        {periodClosed && (
+          <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+            This month&apos;s attendance period is closed, so processing is unavailable for this date. Reopen the period first if this
+            is genuinely required.
+          </p>
+        )}
+
         {error && (
           <div role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
             {error}
           </div>
         )}
 
-        <Button onClick={() => void handleProcess()} disabled={submitting} aria-busy={submitting}>
+        <Button onClick={() => void handleProcess()} disabled={submitting || periodClosed} aria-busy={submitting}>
           {submitting ? "Processing…" : "Process Day"}
         </Button>
 

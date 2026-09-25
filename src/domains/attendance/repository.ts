@@ -90,6 +90,24 @@ export const attendanceSessionRepository = {
       .returning()
       .then((rows) => rows[0]!);
   },
+  /** Batch 8 — the period-closing precondition (§12/§19/§33): how many sessions with `workDate`
+   *  inside `[fromDate, toDate]` are still OPEN. Bounded by how many people are actually mid-shift
+   *  right now (typically small, same cost profile as the dashboard's "Currently Working" query),
+   *  backed by the existing `attendance_open_sessions_company_workdate_idx` — no new index. */
+  async countOpenInRange(companyId: string, fromDate: string, toDate: string, executor: DbExecutor = db): Promise<number> {
+    const rows = await executor
+      .select({ value: count() })
+      .from(attendanceOpenSessions)
+      .where(
+        and(
+          eq(attendanceOpenSessions.companyId, companyId),
+          eq(attendanceOpenSessions.status, "OPEN"),
+          gte(attendanceOpenSessions.workDate, fromDate),
+          lte(attendanceOpenSessions.workDate, toDate),
+        ),
+      );
+    return rows[0]?.value ?? 0;
+  },
 };
 
 export type CreateEventInput = {
@@ -266,6 +284,19 @@ export const attendanceCorrectionRepository = {
   listForEmployee(employeeId: string, executor: DbExecutor = db) {
     return executor.query.attendanceCorrections.findMany({
       where: eq(attendanceCorrections.employeeId, employeeId),
+      orderBy: desc(attendanceCorrections.createdAt),
+      with: CORRECTION_DETAIL_RELATIONS,
+    });
+  },
+  /** Batch 9 — every correction (any status: PENDING/APPROVED/REJECTED) for one employee/work
+   *  date, for the investigation screen's day-scoped "Corrections" section. Distinct from
+   *  `listApprovedForWorkDate` (APPROVED only, the calculation engine's override input) — this one
+   *  must never be substituted for that query, and that query must never be substituted for this
+   *  one. Covered by the existing `attendance_corrections_conflict_idx (employeeId, workDate,
+   *  fieldChanged)` as a leading-column prefix match — no new index. */
+  listForEmployeeWorkDate(employeeId: string, workDate: string, executor: DbExecutor = db) {
+    return executor.query.attendanceCorrections.findMany({
+      where: and(eq(attendanceCorrections.employeeId, employeeId), eq(attendanceCorrections.workDate, workDate)),
       orderBy: desc(attendanceCorrections.createdAt),
       with: CORRECTION_DETAIL_RELATIONS,
     });

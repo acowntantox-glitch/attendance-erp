@@ -29,6 +29,16 @@ export const attendanceDailyStatusEnum = pgEnum("attendance_daily_status", [
 
 export const attendanceCorrectionStatusEnum = pgEnum("attendance_correction_status", ["PENDING", "APPROVED", "REJECTED"]);
 
+/** Deliberately just OPEN/CLOSED (Batch 8) — no FINALIZED/APPROVED/LOCKED/REOPENED. A "reopened"
+ *  period is simply OPEN again; its history (who closed it, who reopened it, when) lives in the
+ *  existing audit log, not in extra statuses here. */
+export const attendancePeriodStatusEnum = pgEnum("attendance_period_status", ["OPEN", "CLOSED"]);
+
+/** Batch 10 — which detected exception a dismissal applies to. Deliberately its own enum, not
+ *  `attendance_daily_status`: `EARLY_DEPARTURE` is not a daily status at all (it's a minute
+ *  threshold on an otherwise PRESENT/LATE record), so the two enums are not interchangeable. */
+export const attendanceExceptionTypeEnum = pgEnum("attendance_exception_type", ["LATE", "INCOMPLETE", "ABSENT", "EARLY_DEPARTURE"]);
+
 /** Reuses the same four event types corrections can target — no second attendance
  *  representation (see Batch 4 architecture: a correction proposes a value for one of these). */
 export const attendanceCorrectionFieldEnum = pgEnum("attendance_correction_field", [
@@ -210,5 +220,86 @@ export const attendanceCorrections = pgTable(
     // Backs the conflict check (no two PENDING/APPROVED corrections targeting the same logical
     // field for the same employee/work date) without a full table scan.
     index("attendance_corrections_conflict_idx").on(table.employeeId, table.workDate, table.fieldChanged),
+  ],
+);
+
+/**
+ * Batch 8 — attendance period closing/locking. One row per (company, calendar month) that has
+ * ever been touched by a close/reopen action OR by the lazy "ensure a row exists" step every
+ * period-lock check performs (see `attendance-period.repository.ts`'s `ensure`) — a month with no
+ * row at all is implicitly OPEN (never closed), exactly like an employee/work-date with no
+ * `attendance_daily_records` row is implicitly "not yet processed," not "absent." `periodMonth` is
+ * a plain `YYYY-MM` string, matching the exact convention Batch 7's monthly calendar already
+ * established for "month" as a concept — not a `date` column, which would force picking an
+ * arbitrary day-of-month with no real meaning.
+ *
+ * `closedAt`/`closedByUserId` describe the CURRENT close (null when the period is OPEN, including
+ * after a reopen) — the full close/reopen history lives in the existing audit log
+ * (`attendance.period.close`/`.reopen`), not duplicated here.
+ */
+export const attendancePeriods = pgTable(
+  "attendance_periods",
+  {
+    id: id(),
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => companies.id, { onDelete: "cascade" }),
+    periodMonth: text("period_month").notNull(),
+    status: attendancePeriodStatusEnum().notNull().default("OPEN"),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+    closedByUserId: uuid("closed_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    ...timestamps,
+  },
+  (table) => [
+    // §7 — a period must be unique per company at the database level, not just app-checked; this
+    // is also the row the `SELECT ... FOR [UPDATE|SHARE]` concurrency strategy locks against (see
+    // the period service) — a mutation and a concurrent close on the very same period always
+    // contend for this same row.
+    uniqueIndex("attendance_periods_company_month_unique").on(table.companyId, table.periodMonth),
+  ],
+);
+
+/**
+ * Batch 10 — attendance exception management. Stores ONLY HR triage metadata: who dismissed a
+ * detected exception, when, and why — never any attendance fact. The exception itself (an
+ * employee/work-date being LATE/INCOMPLETE/ABSENT, or having a nonzero `earlyDepartureMinutes`)
+ * is never persisted; it is always re-derived live from `attendance_daily_records` (see
+ * `attendance-exception.repository.ts`). This table's only job is to answer "has a person already
+ * looked at and dismissed this specific (employee, date, exception type) combination" — deleting
+ * a row (`undismiss`) fully reverses it, with no separate status column, because there is no
+ * intermediate state: either a dismissal row exists or it doesn't.
+ */
+export const attendanceExceptionDismissals = pgTable(
+  "attendance_exception_dismissals",
+  {
+    id: id(),
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => companies.id, { onDelete: "cascade" }),
+    employeeId: uuid("employee_id")
+      .notNull()
+      .references(() => employees.id, { onDelete: "cascade" }),
+    workDate: text("work_date").notNull(),
+    exceptionType: attendanceExceptionTypeEnum("exception_type").notNull(),
+    dismissedByUserId: uuid("dismissed_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "set null" }),
+    dismissedAt: timestamp("dismissed_at", { withTimezone: true }).notNull().defaultNow(),
+    note: text(),
+    ...timestamps,
+  },
+  (table) => [
+    // The row this table's core idempotency guarantee (dismiss is dismiss, however many times)
+    // and its own most common lookup (`findOne` for one employee/date/type) both rely on.
+    uniqueIndex("attendance_exception_dismissals_employee_workdate_type_unique").on(
+      table.employeeId,
+      table.workDate,
+      table.exceptionType,
+    ),
+    // The exception queue's own batched per-page lookup filters by companyId + a bounded list of
+    // (employeeId, workDate) pairs for the current page — this composite index is what that scan
+    // uses; the unique index above already covers employeeId+workDate as a prefix, but a
+    // companyId-scoped one avoids ever having to fall back to a full-table scan within a company.
+    index("attendance_exception_dismissals_company_workdate_idx").on(table.companyId, table.workDate),
   ],
 );

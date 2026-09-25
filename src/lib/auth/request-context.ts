@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { cookies, headers } from "next/headers";
 import { AuthenticationError, AuthorizationError } from "@/lib/errors";
 // A per-request lookup, not cached on the session row — acceptable at current scale; if this
@@ -21,8 +22,14 @@ export type RequestContext = {
  * `role` NEVER come from client-supplied headers, query params, or body — see
  * docs/architecture/security-architecture.md "Tenant Isolation". Throws AuthenticationError if
  * there is no valid session or no active company context.
+ *
+ * Wrapped in React's `cache()` so the shared dashboard layout and the page rendered beneath it
+ * (and anything else invoked during the same render) share one result instead of each re-running
+ * the session/membership/employee lookups — see the performance audit's finding #1. This cache is
+ * scoped to a single server request/render only (Next.js resets it per request); it never persists
+ * across requests, users, or companies, so it cannot leak one caller's context into another's.
  */
-export async function getRequestContext(): Promise<RequestContext> {
+export const getRequestContext = cache(async (): Promise<RequestContext> => {
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE_NAME)?.value;
   if (!token) {
@@ -51,7 +58,7 @@ export async function getRequestContext(): Promise<RequestContext> {
     role: session.company.role,
     employeeId: employee?.id ?? null,
   };
-}
+});
 
 export function requirePermission(ctx: RequestContext, permission: Permission): void {
   if (!can(ctx.role, permission)) {

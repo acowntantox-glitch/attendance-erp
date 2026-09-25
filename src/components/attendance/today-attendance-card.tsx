@@ -1,5 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import type { AttendanceDailyRecord, AttendanceSessionView } from "@/domains/attendance/model";
+import { Badge } from "@/components/ui/badge";
+import type { AttendanceDayRecord, AttendanceSessionView } from "@/domains/attendance/model";
 import { AttendanceStatusBadge } from "./attendance-status-badge";
 import { formatDateLabel, formatInstant, formatMinutesOrNull } from "./format";
 
@@ -23,9 +24,10 @@ export function TodayAttendanceCard({
   referenceSession,
 }: {
   workDate: string;
-  record: AttendanceDailyRecord;
+  record: AttendanceDayRecord;
   referenceSession: AttendanceSessionView | null;
 }) {
+  const isUnprocessed = record.status === "UNPROCESSED";
   const isDayOff = record.status === "HOLIDAY" || record.status === "WEEKLY_OFF";
   const isNoSchedule = record.status === "NO_SCHEDULE";
 
@@ -33,9 +35,15 @@ export function TodayAttendanceCard({
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle>{formatDateLabel(workDate)}</CardTitle>
-        <AttendanceStatusBadge status={record.status} />
+        {isUnprocessed ? <Badge variant="neutral">Not Yet Processed</Badge> : <AttendanceStatusBadge status={record.status} />}
       </CardHeader>
       <CardContent className="space-y-5">
+        {isUnprocessed && (
+          <p className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-600">
+            This month&apos;s attendance period is closed and this day was never processed, so no totals are available. Reopen the
+            period first if this needs to be computed.
+          </p>
+        )}
         {isDayOff && (
           <p className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-600">
             {record.status === "HOLIDAY" ? "This is a company holiday." : "This is a weekly off day."} Checking in is still allowed if
@@ -48,7 +56,7 @@ export function TodayAttendanceCard({
             compare it against.
           </p>
         )}
-        {!referenceSession && record.sessionCount === 0 && !isDayOff && !isNoSchedule && (
+        {!referenceSession && record.sessionCount === 0 && !isDayOff && !isNoSchedule && !isUnprocessed && (
           <p className="text-sm text-slate-500">Not checked in yet today.</p>
         )}
 

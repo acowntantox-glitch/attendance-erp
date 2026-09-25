@@ -62,14 +62,15 @@ export type AttendanceCalendarResult = {
 /** `month` is trusted to already be a validated "YYYY-MM" string (see
  *  `validations/attendance.ts`'s `monthSchema`) — the same trust boundary `getAttendanceReport`
  *  already has for its `fromDate`/`toDate`. Built from the existing `addDays` primitive; not a
- *  second date-utility module. */
-function lastDayOfMonth(month: string): string {
+ *  second date-utility module. Exported so Batch 8's period-lock service can derive the exact same
+ *  calendar-month boundaries without re-deriving this arithmetic a second time. */
+export function lastDayOfMonth(month: string): string {
   const [year = 0, mon = 1] = month.split("-").map(Number);
   const nextMonthFirst = mon === 12 ? `${year + 1}-01-01` : `${year}-${String(mon + 1).padStart(2, "0")}-01`;
   return addDays(nextMonthFirst, -1);
 }
 
-function firstDayOfMonth(month: string): string {
+export function firstDayOfMonth(month: string): string {
   return `${month}-01`;
 }
 
