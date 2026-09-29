@@ -32,10 +32,16 @@ describe.skipIf(!available)("attendance investigation service", () => {
   let companyBId: string;
   let branchId: string;
   let adminUserId: string;
+  let reviewerUserId: string;
   let ctx: import("@/lib/auth/request-context").RequestContext; // COMPANY_ADMIN, company A
   let ctxManager: import("@/lib/auth/request-context").RequestContext;
   let ctxHrManager: import("@/lib/auth/request-context").RequestContext;
   let ctxCompanyB: import("@/lib/auth/request-context").RequestContext;
+  // Batch 12 (attendance correction approval hierarchy) — a distinct HR_ADMIN user, since
+  // self-approval is now forbidden and `ctxHrManager` above shares `adminUserId`'s real
+  // `company_memberships` row (only its in-memory `role` field differs), so it would still trip
+  // the same-user check.
+  let ctxReviewer: import("@/lib/auth/request-context").RequestContext;
 
   const ASSIGNMENT_START = "2020-01-01";
   let daySchedule: { id: string };
@@ -89,6 +95,14 @@ describe.skipIf(!available)("attendance investigation service", () => {
     ctxHrManager = ctxFor({ role: "HR_MANAGER" });
     ctxCompanyB = ctxFor({ companyId: companyBId });
 
+    const [reviewerUser] = await db
+      .insert(schema.users)
+      .values({ email: `inv-reviewer-${Date.now()}@test.local`, passwordHash: "unused", fullName: "Investigation Test Reviewer" })
+      .returning();
+    reviewerUserId = reviewerUser!.id;
+    await db.insert(schema.companyMemberships).values({ userId: reviewerUserId, companyId: companyAId, role: "HR_ADMIN" });
+    ctxReviewer = { ...ctx, userId: reviewerUserId, role: "HR_ADMIN", requestId: "inv-test-reviewer" };
+
     const [branch] = await db.insert(schema.branches).values({ companyId: companyAId, name: "Inv HQ", code: `INV_HQ_${Date.now()}`, timezone: "UTC" }).returning();
     branchId = branch!.id;
 
@@ -116,6 +130,7 @@ describe.skipIf(!available)("attendance investigation service", () => {
     await db.delete(schema.companies).where(eq(schema.companies.id, companyAId));
     await db.delete(schema.companies).where(eq(schema.companies.id, companyBId));
     await db.delete(schema.users).where(eq(schema.users.id, adminUserId));
+    await db.delete(schema.users).where(eq(schema.users.id, reviewerUserId));
     await pool.end();
   });
 
@@ -396,12 +411,13 @@ describe.skipIf(!available)("attendance investigation service", () => {
         correctedValue: new Date(`${WORK_DATE}T18:00:00Z`),
         reason: "Forgot to check out",
       });
-      await attendanceSvc.approveCorrection(ctx, correction.id);
+      // Batch 12 — reviewed by a different user than the requester, since self-approval is now forbidden.
+      await attendanceSvc.approveCorrection(ctxReviewer, correction.id);
 
       const result = await investigationSvc.getAttendanceInvestigation(ctx, employee.id, WORK_DATE);
       expect(result.corrections).toHaveLength(1);
       expect(result.corrections[0]!.status).toBe("APPROVED");
-      expect(result.corrections[0]!.reviewedBy?.id).toBe(adminUserId);
+      expect(result.corrections[0]!.reviewedBy?.id).toBe(reviewerUserId);
       expect(result.record.status).not.toBe("INCOMPLETE");
     });
 
@@ -452,7 +468,8 @@ describe.skipIf(!available)("attendance investigation service", () => {
         correctedValue: new Date(`${WORK_DATE}T19:00:00Z`),
         reason: "Claimed extra hour",
       });
-      await attendanceSvc.rejectCorrection(ctx, correction.id, { reviewNote: "No evidence" });
+      // Batch 12 — reviewed by a different user than the requester, since self-approval is now forbidden.
+      await attendanceSvc.rejectCorrection(ctxReviewer, correction.id, { reviewNote: "No evidence" });
 
       const result = await investigationSvc.getAttendanceInvestigation(ctx, employee.id, WORK_DATE);
       expect(result.corrections).toHaveLength(1);

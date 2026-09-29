@@ -1,4 +1,4 @@
-import { BusinessRuleError, ConflictError, NotFoundError } from "@/lib/errors";
+import { AuthorizationError, BusinessRuleError, ConflictError, NotFoundError } from "@/lib/errors";
 
 export class AlreadyCheckedInError extends ConflictError {
   constructor() {
@@ -45,6 +45,22 @@ export class AttendanceCorrectionNotFoundError extends NotFoundError {
 export class CorrectionAlreadyReviewedError extends BusinessRuleError {
   constructor() {
     super("This correction request has already been approved or rejected.");
+  }
+}
+
+/** Batch 12 — the requester of a correction may never approve or reject that same correction,
+ *  regardless of role. */
+export class SelfApprovalNotAllowedError extends AuthorizationError {
+  constructor() {
+    super("You cannot approve or reject a correction that you requested yourself.");
+  }
+}
+
+/** Batch 12 — the reviewer's current role does not meet the minimum approval hierarchy required
+ *  for the requester's current role (see `canReviewAttendanceCorrection` in rbac.ts). */
+export class InsufficientCorrectionApprovalAuthorityError extends AuthorizationError {
+  constructor() {
+    super("Your role does not have sufficient authority to review a correction requested by this employee's role.");
   }
 }
 

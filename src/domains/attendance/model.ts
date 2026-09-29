@@ -115,6 +115,12 @@ export type AttendanceCorrectionWithDetails = AttendanceCorrection & {
   reviewedBy: { id: string; fullName: string } | null;
 };
 
+/** Batch 12 — one row of the HR correction queue, with the viewer-specific `canReview` flag the
+ *  server already computed (self-approval + approval-hierarchy policy) so the UI never has to
+ *  recreate that policy itself. `canReview` is meaningless outside the queue this viewer is
+ *  looking at, so it's kept off the base `AttendanceCorrectionWithDetails` type. */
+export type AttendanceCorrectionQueueItem = AttendanceCorrectionWithDetails & { canReview: boolean };
+
 /**
  * One resolved, non-overlapping expectation period used by the calculation engine — the output of
  * normalizing a work date's distinct attendance snapshots (see calculation.ts). `expectedStart`

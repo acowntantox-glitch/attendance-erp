@@ -52,11 +52,17 @@ describe.skipIf(!available)("attendance calendar service", () => {
   let companyAId: string;
   let companyBId: string;
   let adminUserId: string;
+  let reviewerUserId: string;
   let ctx: import("@/lib/auth/request-context").RequestContext;
   let ctxHrManager: import("@/lib/auth/request-context").RequestContext;
   let ctxManager: import("@/lib/auth/request-context").RequestContext;
   let ctxEmployee: import("@/lib/auth/request-context").RequestContext;
   let ctxCompanyB: import("@/lib/auth/request-context").RequestContext;
+  // Batch 12 (attendance correction approval hierarchy) — a distinct HR_ADMIN user, since
+  // self-approval is now forbidden and `ctxHrManager` above shares `adminUserId`'s real
+  // `company_memberships` row (only its in-memory `role` field differs), so it would still trip
+  // the same-user check.
+  let ctxReviewer: import("@/lib/auth/request-context").RequestContext;
 
   let branchA1Id: string;
   let branchA2Id: string;
@@ -112,6 +118,14 @@ describe.skipIf(!available)("attendance calendar service", () => {
     ctxManager = { ...ctx, role: "MANAGER", requestId: "cal-test-mgr" };
     ctxEmployee = { ...ctx, role: "EMPLOYEE", requestId: "cal-test-emp" };
     ctxCompanyB = { ...ctx, companyId: companyBId, requestId: "cal-test-b" };
+
+    const [reviewerUser] = await db
+      .insert(schema.users)
+      .values({ email: `cal-reviewer-${Date.now()}@test.local`, passwordHash: "unused", fullName: "Calendar Test Reviewer" })
+      .returning();
+    reviewerUserId = reviewerUser!.id;
+    await db.insert(schema.companyMemberships).values({ userId: reviewerUserId, companyId: companyAId, role: "HR_ADMIN" });
+    ctxReviewer = { ...ctx, userId: reviewerUserId, role: "HR_ADMIN", requestId: "cal-test-reviewer" };
 
     const branchA1 = await organizationSvc.createBranch(ctx, { name: "CalA1", code: `CAL_A1_${Date.now()}` });
     const branchA2 = await organizationSvc.createBranch(ctx, { name: "CalA2", code: `CAL_A2_${Date.now()}` });
@@ -189,6 +203,7 @@ describe.skipIf(!available)("attendance calendar service", () => {
     await db.delete(schema.companies).where(eq(schema.companies.id, companyAId));
     await db.delete(schema.companies).where(eq(schema.companies.id, companyBId));
     await db.delete(schema.users).where(eq(schema.users.id, adminUserId));
+    await db.delete(schema.users).where(eq(schema.users.id, reviewerUserId));
     await pool.end();
   });
 
@@ -354,7 +369,8 @@ describe.skipIf(!available)("attendance calendar service", () => {
         correctedValue: new Date(`${workDate}T18:00:00Z`),
         reason: "Forgot to check out",
       });
-      await attendanceSvc.approveCorrection(ctx, correction.id);
+      // Batch 12 — reviewed by a different user than the requester, since self-approval is now forbidden.
+      await attendanceSvc.approveCorrection(ctxReviewer, correction.id);
 
       const after = await calendarSvc.getAttendanceCalendar(ctx, MONTH, {}, { page: 1, pageSize: 100 });
       const cell = findCell(after, employee.id, workDate);

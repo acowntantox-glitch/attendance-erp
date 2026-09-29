@@ -1,5 +1,5 @@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import type { AttendanceCorrectionWithDetails } from "@/domains/attendance/model";
+import type { AttendanceCorrectionQueueItem } from "@/domains/attendance/model";
 import { CORRECTION_FIELD_LABEL, formatDateLabel, formatInstantWithDate } from "../format";
 import { CorrectionStatusBadge } from "./correction-status-badge";
 import { ReviewCorrectionDialog } from "./review-correction-dialog";
@@ -12,7 +12,7 @@ export function HrCorrectionsTable({
   timezone,
   closedMonths,
 }: {
-  corrections: AttendanceCorrectionWithDetails[];
+  corrections: AttendanceCorrectionQueueItem[];
   timezone: string;
   /** Months (YYYY-MM) whose attendance period is closed, among those present in `corrections` —
    *  used to disable/explain review actions for a correction whose own `workDate` falls in a
@@ -54,7 +54,12 @@ export function HrCorrectionsTable({
               <CorrectionStatusBadge status={correction.status} />
             </TableCell>
             <TableCell>
-              <ReviewCorrectionDialog correction={correction} timezone={timezone} periodClosed={closedMonths.has(correction.workDate.slice(0, 7))} />
+              <ReviewCorrectionDialog
+                correction={correction}
+                timezone={timezone}
+                periodClosed={closedMonths.has(correction.workDate.slice(0, 7))}
+                canReview={correction.canReview}
+              />
             </TableCell>
           </TableRow>
         ))}

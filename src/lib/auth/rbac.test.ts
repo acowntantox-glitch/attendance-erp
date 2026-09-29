@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { can, permissionsForRole, ROLES } from "./rbac";
+import { can, canReviewAttendanceCorrection, getMinimumAttendanceCorrectionApproverRole, permissionsForRole, ROLES } from "./rbac";
 
 describe("rbac", () => {
   it("grants SUPER_ADMIN and COMPANY_ADMIN every permission", () => {
@@ -63,5 +63,43 @@ describe("rbac", () => {
       expect(can(role, "workforce_dashboard.view")).toBe(true);
     }
     expect(can("EMPLOYEE", "workforce_dashboard.view")).toBe(false);
+  });
+
+  describe("Batch 12: attendance correction approval hierarchy", () => {
+    it("returns the correct minimum approver role per requester role", () => {
+      expect(getMinimumAttendanceCorrectionApproverRole("EMPLOYEE")).toBe("HR_MANAGER");
+      expect(getMinimumAttendanceCorrectionApproverRole("MANAGER")).toBe("HR_MANAGER");
+      expect(getMinimumAttendanceCorrectionApproverRole("HR_MANAGER")).toBe("HR_ADMIN");
+      expect(getMinimumAttendanceCorrectionApproverRole("HR_ADMIN")).toBe("COMPANY_ADMIN");
+    });
+
+    it("returns null for COMPANY_ADMIN and SUPER_ADMIN requesters — no added minimum beyond the existing approval-permission model", () => {
+      expect(getMinimumAttendanceCorrectionApproverRole("COMPANY_ADMIN")).toBeNull();
+      expect(getMinimumAttendanceCorrectionApproverRole("SUPER_ADMIN")).toBeNull();
+    });
+
+    it("allows an approver whose rank meets or exceeds the requester's minimum", () => {
+      expect(canReviewAttendanceCorrection("EMPLOYEE", "HR_MANAGER")).toBe(true);
+      expect(canReviewAttendanceCorrection("EMPLOYEE", "HR_ADMIN")).toBe(true);
+      expect(canReviewAttendanceCorrection("EMPLOYEE", "COMPANY_ADMIN")).toBe(true);
+      expect(canReviewAttendanceCorrection("EMPLOYEE", "SUPER_ADMIN")).toBe(true);
+      expect(canReviewAttendanceCorrection("MANAGER", "HR_MANAGER")).toBe(true);
+      expect(canReviewAttendanceCorrection("HR_MANAGER", "HR_ADMIN")).toBe(true);
+      expect(canReviewAttendanceCorrection("HR_ADMIN", "COMPANY_ADMIN")).toBe(true);
+      expect(canReviewAttendanceCorrection("HR_ADMIN", "SUPER_ADMIN")).toBe(true);
+    });
+
+    it("rejects an approver whose rank is below the requester's minimum", () => {
+      expect(canReviewAttendanceCorrection("HR_ADMIN", "HR_MANAGER")).toBe(false);
+      expect(canReviewAttendanceCorrection("HR_MANAGER", "MANAGER")).toBe(false);
+      expect(canReviewAttendanceCorrection("EMPLOYEE", "MANAGER")).toBe(false);
+    });
+
+    it("imposes no minimum-rank restriction for a COMPANY_ADMIN or SUPER_ADMIN requester — any approve-capable role passes here (self-approval is checked separately by the caller)", () => {
+      expect(canReviewAttendanceCorrection("COMPANY_ADMIN", "HR_MANAGER")).toBe(true);
+      expect(canReviewAttendanceCorrection("COMPANY_ADMIN", "HR_ADMIN")).toBe(true);
+      expect(canReviewAttendanceCorrection("SUPER_ADMIN", "HR_MANAGER")).toBe(true);
+      expect(canReviewAttendanceCorrection("SUPER_ADMIN", "HR_ADMIN")).toBe(true);
+    });
   });
 });

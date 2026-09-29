@@ -253,3 +253,55 @@ export function can(role: Role, permission: Permission): boolean {
 export function permissionsForRole(role: Role): readonly Permission[] {
   return ROLE_PERMISSIONS[role];
 }
+
+// ---------------------------------------------------------------------------
+// Attendance correction approval hierarchy (Batch 12) — deliberately its own small, named policy,
+// not a general-purpose role-seniority ranking: the `ROLES` array's declaration order is not a
+// safe stand-in for approval authority anywhere else in this codebase, so this hierarchy is
+// encoded explicitly and only covers the roles that ever hold `attendance.correction.approve`/
+// `.reject` in the first place (HR_MANAGER, HR_ADMIN, COMPANY_ADMIN, SUPER_ADMIN).
+// ---------------------------------------------------------------------------
+
+type AttendanceCorrectionApproverRole = "HR_MANAGER" | "HR_ADMIN" | "COMPANY_ADMIN" | "SUPER_ADMIN";
+
+const ATTENDANCE_CORRECTION_APPROVER_RANK: Record<AttendanceCorrectionApproverRole, number> = {
+  HR_MANAGER: 1,
+  HR_ADMIN: 2,
+  COMPANY_ADMIN: 3,
+  SUPER_ADMIN: 4,
+};
+
+/**
+ * Requester role -> minimum role required to approve/reject their correction. COMPANY_ADMIN and
+ * SUPER_ADMIN are intentionally absent: for those two requester roles there is no additional
+ * minimum beyond already holding `attendance.correction.approve`/`.reject` (the existing
+ * permission model applies as-is) — self-approval prevention is the only extra constraint for
+ * them, enforced separately by the caller (a same-user check, not a role check).
+ */
+const MINIMUM_ATTENDANCE_CORRECTION_APPROVER: Partial<Record<Role, AttendanceCorrectionApproverRole>> = {
+  EMPLOYEE: "HR_MANAGER",
+  MANAGER: "HR_MANAGER",
+  HR_MANAGER: "HR_ADMIN",
+  HR_ADMIN: "COMPANY_ADMIN",
+};
+
+/** The minimum role required to approve/reject a correction requested by `requesterRole`, or
+ *  `null` when this requester role has no added minimum (COMPANY_ADMIN/SUPER_ADMIN — see above). */
+export function getMinimumAttendanceCorrectionApproverRole(requesterRole: Role): Role | null {
+  return MINIMUM_ATTENDANCE_CORRECTION_APPROVER[requesterRole] ?? null;
+}
+
+/**
+ * Whether `approverRole` has sufficient hierarchy authority to review (approve or reject) a
+ * correction requested by `requesterRole`. This is the hierarchy half of the policy only — it
+ * does not check self-approval (a same-user comparison the caller must also apply) and does not
+ * check that `approverRole` holds `attendance.correction.approve`/`.reject` at all (the existing
+ * `requirePermission` call already guards that before this ever runs).
+ */
+export function canReviewAttendanceCorrection(requesterRole: Role, approverRole: Role): boolean {
+  const minimumRole = getMinimumAttendanceCorrectionApproverRole(requesterRole);
+  if (minimumRole === null) return true;
+  const approverRank = ATTENDANCE_CORRECTION_APPROVER_RANK[approverRole as AttendanceCorrectionApproverRole];
+  if (approverRank === undefined) return false;
+  return approverRank >= ATTENDANCE_CORRECTION_APPROVER_RANK[minimumRole as AttendanceCorrectionApproverRole];
+}

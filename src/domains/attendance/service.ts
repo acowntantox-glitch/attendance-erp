@@ -2,6 +2,7 @@ import { attendanceDailyStatusEnum } from "@/db/schema";
 import { db } from "@/db/client";
 import type { RequestContext } from "@/lib/auth/request-context";
 import { assertCompanyAccess, requirePermission } from "@/lib/auth/request-context";
+import { canReviewAttendanceCorrection } from "@/lib/auth/rbac";
 import { AuthorizationError, isUniqueViolation } from "@/lib/errors";
 import { recordAuditLog } from "@/domains/audit/service";
 import { employeeRepository } from "@/domains/employee/repository";
@@ -24,17 +25,20 @@ import {
   CorrectionAlreadyReviewedError,
   DuplicateAttendanceEventError,
   EmployeeNotEligibleForProcessingError,
+  InsufficientCorrectionApprovalAuthorityError,
   InvalidCorrectionEventError,
   InvalidCorrectionTargetError,
   NoOpenBreakError,
   NoOpenSessionError,
   OpenBreakExistsError,
   RecalculationFailedError,
+  SelfApprovalNotAllowedError,
 } from "./errors";
 import type {
   AttendanceCorrection,
   AttendanceCorrectionField,
   AttendanceCorrectionOverride,
+  AttendanceCorrectionQueueItem,
   AttendanceCorrectionWithDetails,
   AttendanceDailyRecord,
   AttendanceDailyStatus,
@@ -863,12 +867,35 @@ export async function listCorrectionsForEmployee(ctx: RequestContext, requestedE
   return attendanceCorrectionRepository.listForEmployee(targetEmployeeId);
 }
 
+/**
+ * Batch 12 — visibility is unchanged (still every correction in the caller's own company, gated
+ * on the same `attendance.correction.approve` permission as before — a user may see a correction
+ * even when they cannot act on it). What's new is `canReview` per row: the same self-approval +
+ * approval-hierarchy policy `reviewCorrection` enforces, computed once here so the UI never has
+ * to recreate that policy independently. Resolved with one batched
+ * `findActiveRolesForUsers` call for the whole page, not one lookup per row.
+ */
 export async function listCompanyCorrections(
   ctx: RequestContext,
   status?: "PENDING" | "APPROVED" | "REJECTED",
-): Promise<AttendanceCorrectionWithDetails[]> {
+): Promise<AttendanceCorrectionQueueItem[]> {
   requirePermission(ctx, "attendance.correction.approve");
-  return attendanceCorrectionRepository.listForCompany(ctx.companyId, status);
+  const corrections = await attendanceCorrectionRepository.listForCompany(ctx.companyId, status);
+
+  const requesterIds = [...new Set(corrections.map((c) => c.requestedByUserId).filter((id): id is string => id !== null))];
+  const requesterRoles = await attendanceCorrectionRepository.findActiveRolesForUsers(ctx.companyId, requesterIds);
+
+  return corrections.map((correction) => {
+    if (correction.requestedByUserId === ctx.userId) {
+      return { ...correction, canReview: false };
+    }
+    const requesterRole = correction.requestedByUserId ? requesterRoles.get(correction.requestedByUserId) : undefined;
+    // No resolvable current role for the requester (e.g. their membership was deactivated) —
+    // fall back to the existing permission-only model rather than blocking a correction that can
+    // then never be reviewed by anyone.
+    const canReview = !requesterRole || canReviewAttendanceCorrection(requesterRole, ctx.role);
+    return { ...correction, canReview };
+  });
 }
 
 /** A single correction's detail — for the HR review UI and an employee checking their own
@@ -891,8 +918,15 @@ export async function getCorrectionDetail(ctx: RequestContext, correctionId: str
  * the transition, and — for an approval — recalculate the affected day *inside the same
  * transaction*. If recalculation throws, the whole transaction (including the status change)
  * rolls back, so a correction can never end up APPROVED while its derived daily record is stale.
- * The same HR user who requested a correction may also approve/reject it — no second-approver
- * requirement is added (existing, deliberate scope).
+ *
+ * Batch 12 — two additional checks sit between the period-lock check and the actual transition:
+ * the requester may never review their own correction (a same-user comparison, deliberately never
+ * role-based — see `SelfApprovalNotAllowedError`, and note this makes self-approval impossible
+ * even if the requester's role changes before review, since `requestedByUserId` never changes),
+ * and the reviewer's CURRENT role must meet the minimum approval hierarchy for the requester's
+ * CURRENT role (`canReviewAttendanceCorrection` in rbac.ts) — resolved fresh here, never from
+ * anything cached on the correction row, so a role change between request and review is always
+ * honored correctly in either direction.
  */
 async function reviewCorrection(
   ctx: RequestContext,
@@ -910,6 +944,22 @@ async function reviewCorrection(
     // by neither. An already-APPROVED correction from before the close is left untouched (this
     // only ever runs while status is still PENDING, per the check just above).
     await assertAttendancePeriodOpen(ctx.companyId, existing.workDate, tx);
+
+    if (existing.requestedByUserId === ctx.userId) {
+      throw new SelfApprovalNotAllowedError();
+    }
+
+    if (existing.requestedByUserId) {
+      const requesterRoles = await attendanceCorrectionRepository.findActiveRolesForUsers(ctx.companyId, [existing.requestedByUserId], tx);
+      const requesterRole = requesterRoles.get(existing.requestedByUserId);
+      // No resolvable current role (e.g. the requester's membership was deactivated) — fall back
+      // to the existing permission-only model rather than leaving the correction unreviewable by
+      // anyone; `requirePermission` above this function already confirmed `ctx.role` holds
+      // `attendance.correction.approve`/`.reject`.
+      if (requesterRole && !canReviewAttendanceCorrection(requesterRole, ctx.role)) {
+        throw new InsufficientCorrectionApprovalAuthorityError();
+      }
+    }
 
     const reviewed = await attendanceCorrectionRepository.review(
       correctionId,

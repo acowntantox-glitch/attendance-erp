@@ -21,8 +21,12 @@ describe.skipIf(!available)("attendance processing service", () => {
   let companyBId: string;
   let branchId: string;
   let adminUserId: string;
+  let reviewerUserId: string;
   let ctx: import("@/lib/auth/request-context").RequestContext;
   let ctxCompanyB: import("@/lib/auth/request-context").RequestContext;
+  // Batch 12 (attendance correction approval hierarchy) — a distinct HR_ADMIN user, since
+  // self-approval is now forbidden.
+  let ctxReviewer: import("@/lib/auth/request-context").RequestContext;
 
   const ASSIGNMENT_START = "2020-01-01";
 
@@ -72,6 +76,14 @@ describe.skipIf(!available)("attendance processing service", () => {
     };
     ctxCompanyB = { ...ctx, companyId: companyBId, requestId: "proc-test-b" };
 
+    const [reviewerUser] = await db
+      .insert(schema.users)
+      .values({ email: `proc-reviewer-${Date.now()}@test.local`, passwordHash: "unused", fullName: "Processing Test Reviewer" })
+      .returning();
+    reviewerUserId = reviewerUser!.id;
+    await db.insert(schema.companyMemberships).values({ userId: reviewerUserId, companyId: companyAId, role: "HR_ADMIN" });
+    ctxReviewer = { ...ctx, userId: reviewerUserId, role: "HR_ADMIN", requestId: "proc-test-reviewer" };
+
     const daySchedule = await workforceSvc.createWorkSchedule(ctx, {
       name: `ProcDay-${Date.now()}`,
       startTime: "09:00:00",
@@ -106,6 +118,7 @@ describe.skipIf(!available)("attendance processing service", () => {
     await db.delete(schema.companies).where(eq(schema.companies.id, companyAId));
     await db.delete(schema.companies).where(eq(schema.companies.id, companyBId));
     await db.delete(schema.users).where(eq(schema.users.id, adminUserId));
+    await db.delete(schema.users).where(eq(schema.users.id, reviewerUserId));
     await pool.end();
   });
 
@@ -269,7 +282,8 @@ describe.skipIf(!available)("attendance processing service", () => {
         correctedValue: new Date(`${workDate}T18:00:00Z`),
         reason: "Forgot to check out",
       });
-      await svc.approveCorrection(ctx, approved.id);
+      // Batch 12 — reviewed by a different user than the requester, since self-approval is now forbidden.
+      await svc.approveCorrection(ctxReviewer, approved.id);
 
       const afterApproval = await proc.processEmployeeAttendanceDay(ctx, { employeeId: employeeScheduledId, workDate });
       expect(afterApproval.status).not.toBe("INCOMPLETE");
@@ -286,7 +300,8 @@ describe.skipIf(!available)("attendance processing service", () => {
         correctedValue: new Date(`${workDate2}T18:00:00Z`),
         reason: "Forgot to check out",
       });
-      await svc.rejectCorrection(ctx, rejected.id);
+      // Batch 12 — reviewed by a different user than the requester, since self-approval is now forbidden.
+      await svc.rejectCorrection(ctxReviewer, rejected.id);
 
       const afterRejection = await proc.processEmployeeAttendanceDay(ctx, { employeeId: employeeScheduledId, workDate: workDate2 });
       expect(afterRejection.status).toBe("INCOMPLETE");

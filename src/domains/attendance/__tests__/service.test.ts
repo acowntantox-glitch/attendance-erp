@@ -24,9 +24,15 @@ describe.skipIf(!available)("attendance service", () => {
   let companyBId: string;
   let branchId: string;
   let adminUserId: string;
+  let reviewerUserId: string;
   let ctx: import("@/lib/auth/request-context").RequestContext;
   let ctxCompanyB: import("@/lib/auth/request-context").RequestContext;
   let ctxManager: import("@/lib/auth/request-context").RequestContext;
+  // Batch 12 — a distinct HR_ADMIN user, never the requester in any pre-existing test below.
+  // Self-approval is now forbidden, so a test that both requests and reviews a correction under
+  // the exact same user (as every pre-Batch-12 lifecycle/concurrency/rollback test originally did
+  // with `ctx`) must review with a *different* eligible user instead — this is that user.
+  let ctxReviewer: import("@/lib/auth/request-context").RequestContext;
 
   // Assignments are effective from well before any test date below and never closed, so every
   // fixed test timestamp (all in 2026, after 2026-01-01) resolves against them unambiguously.
@@ -84,6 +90,14 @@ describe.skipIf(!available)("attendance service", () => {
     };
     ctxCompanyB = { ...ctx, companyId: companyBId, requestId: "att-test-b" };
     ctxManager = { ...ctx, role: "MANAGER", requestId: "att-test-manager" };
+
+    const [reviewerUser] = await db
+      .insert(schema.users)
+      .values({ email: `att-reviewer-${Date.now()}@test.local`, passwordHash: "unused", fullName: "Attendance Test Reviewer" })
+      .returning();
+    reviewerUserId = reviewerUser!.id;
+    await db.insert(schema.companyMemberships).values({ userId: reviewerUserId, companyId: companyAId, role: "HR_ADMIN" });
+    ctxReviewer = { ...ctx, userId: reviewerUserId, role: "HR_ADMIN", requestId: "att-test-reviewer" };
 
     const daySchedule = await workforceSvc.createWorkSchedule(ctx, {
       name: `AttDay-${Date.now()}`,
@@ -160,6 +174,7 @@ describe.skipIf(!available)("attendance service", () => {
     await db.delete(schema.companies).where(eq(schema.companies.id, companyAId));
     await db.delete(schema.companies).where(eq(schema.companies.id, companyBId));
     await db.delete(schema.users).where(eq(schema.users.id, adminUserId));
+    await db.delete(schema.users).where(eq(schema.users.id, reviewerUserId));
     await pool.end();
   });
 
@@ -778,11 +793,13 @@ describe.skipIf(!available)("attendance service", () => {
       });
       expect(correction.status).toBe("PENDING");
 
-      const approved = await svc.approveCorrection(ctx, correction.id, { reviewNote: "Confirmed with manager" });
+      // Batch 12 — reviewed by a different user than the requester (`ctx`), since self-approval
+      // is now forbidden; the lifecycle/audit behavior under test is otherwise unchanged.
+      const approved = await svc.approveCorrection(ctxReviewer, correction.id, { reviewNote: "Confirmed with manager" });
       expect(approved.status).toBe("APPROVED");
-      expect(approved.reviewedByUserId).toBe(adminUserId);
+      expect(approved.reviewedByUserId).toBe(reviewerUserId);
 
-      await expect(svc.approveCorrection(ctx, correction.id)).rejects.toThrow(errors.CorrectionAlreadyReviewedError);
+      await expect(svc.approveCorrection(ctxReviewer, correction.id)).rejects.toThrow(errors.CorrectionAlreadyReviewedError);
     });
 
     it("supports rejection", async () => {
@@ -792,7 +809,8 @@ describe.skipIf(!available)("attendance service", () => {
         correctedValue: new Date("2026-02-21T09:00:00Z"),
         reason: "Requesting an adjustment",
       });
-      const rejected = await svc.rejectCorrection(ctx, correction.id, { reviewNote: "Not enough evidence" });
+      // Batch 12 — reviewed by a different user than the requester; see the note above.
+      const rejected = await svc.rejectCorrection(ctxReviewer, correction.id, { reviewNote: "Not enough evidence" });
       expect(rejected.status).toBe("REJECTED");
     });
 
@@ -1005,7 +1023,8 @@ describe.skipIf(!available)("attendance service", () => {
           correctedValue: new Date("2026-03-13T12:45:00Z"), // still after check-in, still before break-end
           reason: "Break actually started 15 minutes earlier",
         });
-        await svc.approveCorrection(ctx, correction.id);
+        // Batch 12 — reviewed by a different user than the requester; see the note above.
+        await svc.approveCorrection(ctxReviewer, correction.id);
 
         const after = await svc.getAttendanceDay(ctx, employeeGraceId, "2026-03-13");
         expect(after.record.breakMinutes).toBe(45); // 12:45-13:30
@@ -1032,7 +1051,8 @@ describe.skipIf(!available)("attendance service", () => {
       const stillPending = await svc.getAttendanceDay(ctx, employeeGraceId, "2026-03-15");
       expect(stillPending.record.status).toBe("INCOMPLETE");
 
-      const approved = await svc.approveCorrection(ctx, correction.id, { reviewNote: "Confirmed via manual timesheet" });
+      // Batch 12 — reviewed by a different user than the requester; see the note above.
+      const approved = await svc.approveCorrection(ctxReviewer, correction.id, { reviewNote: "Confirmed via manual timesheet" });
       expect(approved.status).toBe("APPROVED");
 
       const after = await svc.getAttendanceDay(ctx, employeeGraceId, "2026-03-15");
@@ -1054,7 +1074,8 @@ describe.skipIf(!available)("attendance service", () => {
         reason: "Forgot to check out",
       });
 
-      const rejected = await svc.rejectCorrection(ctx, correction.id, { reviewNote: "Insufficient evidence" });
+      // Batch 12 — reviewed by a different user than the requester; see the note above.
+      const rejected = await svc.rejectCorrection(ctxReviewer, correction.id, { reviewNote: "Insufficient evidence" });
       expect(rejected.status).toBe("REJECTED");
 
       const record = await svc.getAttendanceDay(ctx, employeeGraceId, "2026-03-16");
@@ -1069,7 +1090,11 @@ describe.skipIf(!available)("attendance service", () => {
         reason: "Race test",
       });
 
-      const [a, b] = await Promise.allSettled([svc.approveCorrection(ctx, correction.id), svc.approveCorrection(ctx, correction.id)]);
+      // Batch 12 — reviewed by a different user than the requester; see the note above.
+      const [a, b] = await Promise.allSettled([
+        svc.approveCorrection(ctxReviewer, correction.id),
+        svc.approveCorrection(ctxReviewer, correction.id),
+      ]);
       const outcomes = [a, b];
       expect(outcomes.filter((o) => o.status === "fulfilled")).toHaveLength(1);
       const rejectedOutcomes = outcomes.filter((o) => o.status === "rejected");
@@ -1096,7 +1121,8 @@ describe.skipIf(!available)("attendance service", () => {
       vi.setSystemTime(new Date("2026-03-18T17:00:00Z"));
       await svc.checkOut(ctx, employeeGraceId);
 
-      await expect(svc.approveCorrection(ctx, correction.id)).rejects.toThrow(errors.RecalculationFailedError);
+      // Batch 12 — reviewed by a different user than the requester; see the note above.
+      await expect(svc.approveCorrection(ctxReviewer, correction.id)).rejects.toThrow(errors.RecalculationFailedError);
 
       const stillPending = await svc.getCorrectionDetail(ctx, correction.id);
       expect(stillPending.status).toBe("PENDING");
@@ -1104,6 +1130,268 @@ describe.skipIf(!available)("attendance service", () => {
 
       const record = await svc.getAttendanceDay(ctx, employeeGraceId, "2026-03-18");
       expect(record.record.workedMinutes).toBe(480); // the real checkout (09:00-17:00), unaffected by the failed approval
+    });
+  });
+
+  describe("Batch 12: correction approval hierarchy", () => {
+    let employeeRoleUserId: string;
+    let managerRoleUserId: string;
+    let hrManagerRoleUserId: string;
+    let hrAdminRoleUserId: string;
+    let superAdminRoleUserId: string;
+    let employeeRoleCtx: import("@/lib/auth/request-context").RequestContext;
+    let managerRoleCtx: import("@/lib/auth/request-context").RequestContext;
+    let hrManagerRoleCtx: import("@/lib/auth/request-context").RequestContext;
+    let hrAdminRoleCtx: import("@/lib/auth/request-context").RequestContext;
+    let superAdminRoleCtx: import("@/lib/auth/request-context").RequestContext;
+
+    // A genuinely distinct user with a real `company_memberships` row at the given role — unlike
+    // `ctxFor`, which only overrides the in-memory RequestContext.role for permission-check
+    // purposes, `findActiveRolesForUsers` reads the real DB row, so testing the hierarchy policy
+    // requires real, separate rows per role, not a shared `adminUserId` with an overridden ctx.
+    async function createRoleUser(role: "EMPLOYEE" | "MANAGER" | "HR_MANAGER" | "HR_ADMIN" | "COMPANY_ADMIN" | "SUPER_ADMIN") {
+      const [user] = await db
+        .insert(schema.users)
+        .values({
+          email: `batch12-${role.toLowerCase()}-${Date.now()}-${Math.random().toString(36).slice(2)}@test.local`,
+          passwordHash: "unused",
+          fullName: `Batch12 ${role}`,
+        })
+        .returning();
+      await db.insert(schema.companyMemberships).values({ userId: user!.id, companyId: companyAId, role });
+      return user!.id;
+    }
+
+    beforeAll(async () => {
+      employeeRoleUserId = await createRoleUser("EMPLOYEE");
+      managerRoleUserId = await createRoleUser("MANAGER");
+      hrManagerRoleUserId = await createRoleUser("HR_MANAGER");
+      hrAdminRoleUserId = await createRoleUser("HR_ADMIN");
+      superAdminRoleUserId = await createRoleUser("SUPER_ADMIN");
+
+      employeeRoleCtx = ctxFor({ role: "EMPLOYEE", userId: employeeRoleUserId, employeeId: employeeAId });
+      managerRoleCtx = ctxFor({ role: "MANAGER", userId: managerRoleUserId, employeeId: null });
+      hrManagerRoleCtx = ctxFor({ role: "HR_MANAGER", userId: hrManagerRoleUserId, employeeId: null });
+      hrAdminRoleCtx = ctxFor({ role: "HR_ADMIN", userId: hrAdminRoleUserId, employeeId: null });
+      superAdminRoleCtx = ctxFor({ role: "SUPER_ADMIN", userId: superAdminRoleUserId, employeeId: null });
+    });
+
+    afterAll(async () => {
+      for (const id of [employeeRoleUserId, managerRoleUserId, hrManagerRoleUserId, hrAdminRoleUserId, superAdminRoleUserId]) {
+        await db.delete(schema.users).where(eq(schema.users.id, id));
+      }
+    });
+
+    describe("self-approval", () => {
+      it("blocks a user from approving or rejecting their own correction, for every role that holds both request and approve permissions", async () => {
+        const cases: [string, import("@/lib/auth/request-context").RequestContext][] = [
+          ["HR_MANAGER", hrManagerRoleCtx],
+          ["HR_ADMIN", hrAdminRoleCtx],
+          ["COMPANY_ADMIN", ctx],
+          ["SUPER_ADMIN", superAdminRoleCtx],
+        ];
+        let day = 1;
+        for (const [, roleCtx] of cases) {
+          const workDate = `2026-04-${String(day++).padStart(2, "0")}`;
+          const correction = await svc.requestCorrection(roleCtx, employeeAId, {
+            workDate,
+            fieldChanged: "CHECK_IN",
+            correctedValue: new Date(`${workDate}T09:00:00Z`),
+            reason: "Self-approval attempt should be blocked",
+          });
+          await expect(svc.approveCorrection(roleCtx, correction.id)).rejects.toThrow(errors.SelfApprovalNotAllowedError);
+          await expect(svc.rejectCorrection(roleCtx, correction.id)).rejects.toThrow(errors.SelfApprovalNotAllowedError);
+
+          // Still PENDING — both attempts rolled back cleanly, not partially applied.
+          const stillPending = await svc.getCorrectionDetail(ctx, correction.id);
+          expect(stillPending.status).toBe("PENDING");
+        }
+      });
+    });
+
+    describe("hierarchy", () => {
+      it("HR_MANAGER can approve a correction requested by EMPLOYEE", async () => {
+        const correction = await svc.requestCorrection(employeeRoleCtx, employeeAId, {
+          workDate: "2026-04-10",
+          fieldChanged: "CHECK_IN",
+          correctedValue: new Date("2026-04-10T09:00:00Z"),
+          reason: "Employee request",
+        });
+        const approved = await svc.approveCorrection(hrManagerRoleCtx, correction.id);
+        expect(approved.status).toBe("APPROVED");
+      });
+
+      it("HR_MANAGER can approve a correction requested by MANAGER", async () => {
+        const correction = await svc.requestCorrection(managerRoleCtx, employeeAId, {
+          workDate: "2026-04-11",
+          fieldChanged: "CHECK_IN",
+          correctedValue: new Date("2026-04-11T09:00:00Z"),
+          reason: "Manager request",
+        });
+        const approved = await svc.approveCorrection(hrManagerRoleCtx, correction.id);
+        expect(approved.status).toBe("APPROVED");
+      });
+
+      it("HR_MANAGER cannot approve a correction requested by HR_ADMIN", async () => {
+        const correction = await svc.requestCorrection(hrAdminRoleCtx, employeeAId, {
+          workDate: "2026-04-12",
+          fieldChanged: "CHECK_IN",
+          correctedValue: new Date("2026-04-12T09:00:00Z"),
+          reason: "HR_ADMIN request",
+        });
+        await expect(svc.approveCorrection(hrManagerRoleCtx, correction.id)).rejects.toThrow(errors.InsufficientCorrectionApprovalAuthorityError);
+      });
+
+      it("HR_ADMIN can approve a correction requested by HR_MANAGER", async () => {
+        const correction = await svc.requestCorrection(hrManagerRoleCtx, employeeAId, {
+          workDate: "2026-04-13",
+          fieldChanged: "CHECK_IN",
+          correctedValue: new Date("2026-04-13T09:00:00Z"),
+          reason: "HR_MANAGER request",
+        });
+        const approved = await svc.approveCorrection(hrAdminRoleCtx, correction.id);
+        expect(approved.status).toBe("APPROVED");
+      });
+
+      // NOTE: the read-only inspection's originally proposed policy table listed "HR_ADMIN cannot
+      // approve a COMPANY_ADMIN correction," but this implementation task's own Business Rules
+      // section explicitly overrides that for COMPANY_ADMIN/SUPER_ADMIN requesters: "preserve the
+      // existing approval-permission model" (no added minimum) — so this test verifies the
+      // *implemented* policy, which allows it (self-approval prevention is the only extra
+      // constraint for these two requester roles). See the final report's "remaining limitation"
+      // section for this discrepancy.
+      it("HR_ADMIN CAN approve a correction requested by COMPANY_ADMIN — no added minimum for a COMPANY_ADMIN requester, per the explicit 'preserve existing approval-permission model' rule", async () => {
+        const correction = await svc.requestCorrection(ctx, employeeAId, {
+          workDate: "2026-04-14",
+          fieldChanged: "CHECK_IN",
+          correctedValue: new Date("2026-04-14T09:00:00Z"),
+          reason: "COMPANY_ADMIN request",
+        });
+        const approved = await svc.approveCorrection(hrAdminRoleCtx, correction.id);
+        expect(approved.status).toBe("APPROVED");
+      });
+
+      it("COMPANY_ADMIN can approve a correction requested by HR_ADMIN", async () => {
+        const correction = await svc.requestCorrection(hrAdminRoleCtx, employeeAId, {
+          workDate: "2026-04-15",
+          fieldChanged: "CHECK_IN",
+          correctedValue: new Date("2026-04-15T09:00:00Z"),
+          reason: "HR_ADMIN request",
+        });
+        const approved = await svc.approveCorrection(ctx, correction.id);
+        expect(approved.status).toBe("APPROVED");
+      });
+    });
+
+    describe("current-role behavior", () => {
+      it("evaluates approval authority using the requester's CURRENT role, not their role at request time (promotion after request)", async () => {
+        const promotedUserId = await createRoleUser("HR_MANAGER");
+        const promotedCtx = ctxFor({ role: "HR_MANAGER", userId: promotedUserId, employeeId: null });
+
+        const correction = await svc.requestCorrection(promotedCtx, employeeAId, {
+          workDate: "2026-04-16",
+          fieldChanged: "CHECK_IN",
+          correctedValue: new Date("2026-04-16T09:00:00Z"),
+          reason: "Filed while still HR_MANAGER",
+        });
+
+        // Promoted to HR_ADMIN before anyone reviews it.
+        await db
+          .update(schema.companyMemberships)
+          .set({ role: "HR_ADMIN" })
+          .where(and(eq(schema.companyMemberships.userId, promotedUserId), eq(schema.companyMemberships.companyId, companyAId)));
+
+        // An HR_MANAGER-level reviewer is no longer sufficient, now that the requester's CURRENT
+        // role is HR_ADMIN (minimum COMPANY_ADMIN) — not their HR_MANAGER role at request time.
+        await expect(svc.approveCorrection(hrManagerRoleCtx, correction.id)).rejects.toThrow(errors.InsufficientCorrectionApprovalAuthorityError);
+
+        const approved = await svc.approveCorrection(ctx, correction.id);
+        expect(approved.status).toBe("APPROVED");
+
+        await db.delete(schema.users).where(eq(schema.users.id, promotedUserId));
+      });
+
+      it("evaluates approval authority using the requester's CURRENT role, not their role at request time (demotion after request)", async () => {
+        const demotedUserId = await createRoleUser("HR_ADMIN");
+        const demotedCtx = ctxFor({ role: "HR_ADMIN", userId: demotedUserId, employeeId: null });
+
+        const correction = await svc.requestCorrection(demotedCtx, employeeAId, {
+          workDate: "2026-04-17",
+          fieldChanged: "CHECK_IN",
+          correctedValue: new Date("2026-04-17T09:00:00Z"),
+          reason: "Filed while still HR_ADMIN",
+        });
+
+        // Demoted to HR_MANAGER before anyone reviews it.
+        await db
+          .update(schema.companyMemberships)
+          .set({ role: "HR_MANAGER" })
+          .where(and(eq(schema.companyMemberships.userId, demotedUserId), eq(schema.companyMemberships.companyId, companyAId)));
+
+        // An HR_ADMIN-level reviewer now suffices, because the requester's CURRENT role (demoted
+        // to HR_MANAGER) only requires an HR_ADMIN minimum — not the COMPANY_ADMIN minimum their
+        // original HR_ADMIN role at request time would have required.
+        const approved = await svc.approveCorrection(hrAdminRoleCtx, correction.id);
+        expect(approved.status).toBe("APPROVED");
+
+        await db.delete(schema.users).where(eq(schema.users.id, demotedUserId));
+      });
+    });
+
+    describe("self-approval after role change", () => {
+      it("cannot be bypassed by promoting the requester to a role with no hierarchy minimum", async () => {
+        const userId = await createRoleUser("HR_MANAGER");
+        const requesterCtx = ctxFor({ role: "HR_MANAGER", userId, employeeId: null });
+
+        const correction = await svc.requestCorrection(requesterCtx, employeeAId, {
+          workDate: "2026-04-18",
+          fieldChanged: "CHECK_IN",
+          correctedValue: new Date("2026-04-18T09:00:00Z"),
+          reason: "Self-approval-after-promotion attempt",
+        });
+
+        // Promoted to SUPER_ADMIN, which on its own would face no hierarchy minimum at all.
+        await db
+          .update(schema.companyMemberships)
+          .set({ role: "SUPER_ADMIN" })
+          .where(and(eq(schema.companyMemberships.userId, userId), eq(schema.companyMemberships.companyId, companyAId)));
+        const promotedCtx = ctxFor({ role: "SUPER_ADMIN", userId, employeeId: null });
+
+        // Still blocked: the check is requestedByUserId === ctx.userId, never role-based.
+        await expect(svc.approveCorrection(promotedCtx, correction.id)).rejects.toThrow(errors.SelfApprovalNotAllowedError);
+
+        await db.delete(schema.users).where(eq(schema.users.id, userId));
+      });
+    });
+
+    describe("visibility", () => {
+      it("keeps company-scoped visibility unchanged: a user can see a correction in the queue even when canReview is false", async () => {
+        const correction = await svc.requestCorrection(hrAdminRoleCtx, employeeAId, {
+          workDate: "2026-04-19",
+          fieldChanged: "CHECK_IN",
+          correctedValue: new Date("2026-04-19T09:00:00Z"),
+          reason: "HR_ADMIN request for visibility check",
+        });
+
+        // hrManagerRoleCtx cannot approve an HR_ADMIN's correction (insufficient hierarchy), but
+        // must still see it in the company-scoped queue — visibility and approval are separate.
+        const queue = await svc.listCompanyCorrections(hrManagerRoleCtx, "PENDING");
+        const row = queue.find((c) => c.id === correction.id);
+        expect(row).toBeDefined();
+        expect(row!.canReview).toBe(false);
+
+        // The requester's own view of the queue: self-approval also reports canReview: false.
+        const ownQueue = await svc.listCompanyCorrections(hrAdminRoleCtx, "PENDING");
+        const ownRow = ownQueue.find((c) => c.id === correction.id);
+        expect(ownRow!.canReview).toBe(false);
+
+        // A COMPANY_ADMIN, with sufficient hierarchy and not the requester, sees canReview: true.
+        const adminQueue = await svc.listCompanyCorrections(ctx, "PENDING");
+        const adminRow = adminQueue.find((c) => c.id === correction.id);
+        expect(adminRow!.canReview).toBe(true);
+
+        await svc.approveCorrection(ctx, correction.id);
+      });
     });
   });
 

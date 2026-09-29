@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import type { AttendanceCorrectionWithDetails } from "@/domains/attendance/model";
+import type { AttendanceCorrectionQueueItem } from "@/domains/attendance/model";
 import { CORRECTION_FIELD_LABEL, formatDateLabel, formatInstantWithDate } from "../format";
 import { CorrectionStatusBadge } from "./correction-status-badge";
 
@@ -21,15 +21,23 @@ async function parseErrorMessage(response: Response, fallback: string): Promise<
  * actions go through the existing `.../approve` / `.../reject` routes; this component never
  * computes or previews a recalculated total itself, it only tells the reviewer that approval
  * *will* trigger one server-side.
+ *
+ * Batch 12 — `canReview` is server-computed (self-approval + approval-hierarchy policy, see
+ * `listCompanyCorrections`), not re-derived here: this component only reads that flag to disable
+ * the actions and explain why, exactly like the existing `periodClosed` handling below. The
+ * `.../approve` / `.../reject` routes remain the actual enforcement boundary regardless of what
+ * this dialog shows.
  */
 export function ReviewCorrectionDialog({
   correction,
   timezone,
   periodClosed,
+  canReview,
 }: {
-  correction: AttendanceCorrectionWithDetails;
+  correction: AttendanceCorrectionQueueItem;
   timezone: string;
   periodClosed: boolean;
+  canReview: boolean;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -144,6 +152,13 @@ export function ReviewCorrectionDialog({
             </p>
           )}
 
+          {correction.status === "PENDING" && !periodClosed && !canReview && (
+            <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+              You can&apos;t review this correction — either you requested it yourself, or your role doesn&apos;t meet the minimum
+              approval level required for the requester&apos;s role.
+            </p>
+          )}
+
           {correction.status === "PENDING" && (
             <div>
               <Label htmlFor="review-note">Review note (optional)</Label>
@@ -157,10 +172,15 @@ export function ReviewCorrectionDialog({
 
         {correction.status === "PENDING" && (
           <DialogFooter>
-            <Button variant="danger" onClick={() => void submit("REJECT")} disabled={submitting || periodClosed} aria-busy={pendingAction === "REJECT"}>
+            <Button
+              variant="danger"
+              onClick={() => void submit("REJECT")}
+              disabled={submitting || periodClosed || !canReview}
+              aria-busy={pendingAction === "REJECT"}
+            >
               {pendingAction === "REJECT" ? "Rejecting…" : "Reject"}
             </Button>
-            <Button onClick={() => void submit("APPROVE")} disabled={submitting || periodClosed} aria-busy={pendingAction === "APPROVE"}>
+            <Button onClick={() => void submit("APPROVE")} disabled={submitting || periodClosed || !canReview} aria-busy={pendingAction === "APPROVE"}>
               {pendingAction === "APPROVE" ? "Approving…" : "Approve"}
             </Button>
           </DialogFooter>

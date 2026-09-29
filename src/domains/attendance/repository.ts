@@ -1,6 +1,16 @@
 import { and, asc, count, desc, eq, gte, ilike, inArray, isNull, lte, or } from "drizzle-orm";
 import { db, type DbExecutor, type Transaction } from "@/db/client";
-import { attendanceCorrections, attendanceDailyRecords, attendanceEvents, attendanceOpenSessions, branches, departments, employees } from "@/db/schema";
+import {
+  attendanceCorrections,
+  attendanceDailyRecords,
+  attendanceEvents,
+  attendanceOpenSessions,
+  branches,
+  companyMemberships,
+  departments,
+  employees,
+} from "@/db/schema";
+import type { Role } from "@/lib/auth/rbac";
 import type { AttendanceDailyStatus, AttendanceEventType, AttendanceSource } from "./model";
 
 export type CreateSessionInput = {
@@ -374,6 +384,22 @@ export const attendanceCorrectionRepository = {
       .where(eq(attendanceCorrections.id, id))
       .returning()
       .then((rows) => rows[0]!);
+  },
+  /**
+   * Batch 12 — each of these users' current ACTIVE company role, keyed by userId. Mirrors the
+   * same "current role" definition `session.ts`'s `validateSessionToken` already uses
+   * (`isActive = true`) — this is deliberately a live lookup, never anything cached on the
+   * correction row itself, so a role change between request and review is always reflected.
+   * Used only by the correction-approval hierarchy policy (`canReviewAttendanceCorrection` in
+   * rbac.ts), both for the single-correction check inside `reviewCorrection` and for the queue's
+   * per-row `canReview` flag — one batched query for a whole page of corrections, not one per row.
+   */
+  async findActiveRolesForUsers(companyId: string, userIds: string[], executor: DbExecutor = db): Promise<Map<string, Role>> {
+    if (userIds.length === 0) return new Map();
+    const rows = await executor.query.companyMemberships.findMany({
+      where: and(eq(companyMemberships.companyId, companyId), inArray(companyMemberships.userId, userIds), eq(companyMemberships.isActive, true)),
+    });
+    return new Map(rows.map((r) => [r.userId, r.role]));
   },
 };
 
