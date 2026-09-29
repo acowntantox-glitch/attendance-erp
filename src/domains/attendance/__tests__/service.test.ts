@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { isDatabaseAvailable } from "../../../tests/setup/db";
 
 const available = await isDatabaseAvailable();
@@ -316,6 +316,32 @@ describe.skipIf(!available)("attendance service", () => {
       const closed = await svc.getCurrentSession(ctx, employee.id);
       expect(closed.session).toBeNull();
       expect(closed.hasOpenBreak).toBe(false);
+    });
+
+    it("Batch 11 hardening: rejects check-in for an employee whose employment status is no longer ACTIVE", async () => {
+      const employee = await employeeService.createEmployee(ctx, {
+        firstName: "Att",
+        lastName: `Terminated-${Date.now()}`,
+        workEmail: `att-terminated-${Date.now()}@test.local`,
+        dateOfJoining: "2020-01-01",
+        locationId: branchId,
+      });
+      await employeeService.changeEmployeeStatus(ctx, employee.id, "TERMINATED");
+
+      await expect(svc.checkIn(ctx, employee.id)).rejects.toThrow(errors.EmployeeNotEligibleForProcessingError);
+    });
+
+    it("Batch 11 hardening: rejects check-in for an archived employee", async () => {
+      const employee = await employeeService.createEmployee(ctx, {
+        firstName: "Att",
+        lastName: `Archived-${Date.now()}`,
+        workEmail: `att-archived-${Date.now()}@test.local`,
+        dateOfJoining: "2020-01-01",
+        locationId: branchId,
+      });
+      await employeeService.archiveEmployee(ctx, employee.id);
+
+      await expect(svc.checkIn(ctx, employee.id)).rejects.toThrow(errors.EmployeeNotEligibleForProcessingError);
     });
   });
 
@@ -889,6 +915,101 @@ describe.skipIf(!available)("attendance service", () => {
           reason: "Field mismatch should be rejected",
         }),
       ).rejects.toThrow(errors.InvalidCorrectionEventError);
+    });
+
+    describe("Batch 11 hardening: timestamp ordering", () => {
+      it("rejects a CHECK_OUT correction proposing a time before the session's own check-in", async () => {
+        vi.setSystemTime(new Date("2026-03-10T09:00:00Z"));
+        await svc.checkIn(ctx, employeeGraceId);
+        vi.setSystemTime(new Date("2026-03-10T18:00:00Z"));
+        await svc.checkOut(ctx, employeeGraceId);
+
+        await expect(
+          svc.requestCorrection(ctx, employeeGraceId, {
+            workDate: "2026-03-10",
+            fieldChanged: "CHECK_OUT",
+            correctedValue: new Date("2026-03-10T08:30:00Z"), // before the 09:00 check-in
+            reason: "Typo — should never be accepted",
+          }),
+        ).rejects.toThrow(errors.InvalidCorrectionTargetError);
+      });
+
+      it("rejects a CHECK_IN correction proposing a time after the session's own check-out", async () => {
+        vi.setSystemTime(new Date("2026-03-11T09:00:00Z"));
+        const session = await svc.checkIn(ctx, employeeGraceId);
+        vi.setSystemTime(new Date("2026-03-11T18:00:00Z"));
+        await svc.checkOut(ctx, employeeGraceId);
+        const [checkInEvent] = await db.query.attendanceEvents.findMany({
+          where: and(eq(schema.attendanceEvents.sessionId, session.id), eq(schema.attendanceEvents.eventType, "CHECK_IN")),
+        });
+
+        await expect(
+          svc.requestCorrection(ctx, employeeGraceId, {
+            workDate: "2026-03-11",
+            fieldChanged: "CHECK_IN",
+            eventId: checkInEvent!.id,
+            correctedValue: new Date("2026-03-11T19:00:00Z"), // after the 18:00 check-out
+            reason: "Typo — should never be accepted",
+          }),
+        ).rejects.toThrow(errors.InvalidCorrectionTargetError);
+      });
+
+      it("rejects a BREAK_END correction proposing a time before its own break's start, and a BREAK_START correction proposing a time after its own break's end", async () => {
+        vi.setSystemTime(new Date("2026-03-12T09:00:00Z"));
+        await svc.checkIn(ctx, employeeGraceId);
+        vi.setSystemTime(new Date("2026-03-12T13:00:00Z"));
+        const breakStart = await svc.startBreak(ctx, employeeGraceId);
+        vi.setSystemTime(new Date("2026-03-12T13:30:00Z"));
+        const breakEnd = await svc.endBreak(ctx, employeeGraceId);
+        vi.setSystemTime(new Date("2026-03-12T18:00:00Z"));
+        await svc.checkOut(ctx, employeeGraceId);
+
+        await expect(
+          svc.requestCorrection(ctx, employeeGraceId, {
+            workDate: "2026-03-12",
+            fieldChanged: "BREAK_END",
+            eventId: breakEnd.id,
+            correctedValue: new Date("2026-03-12T12:45:00Z"), // before the 13:00 break-start
+            reason: "Typo — should never be accepted",
+          }),
+        ).rejects.toThrow(errors.InvalidCorrectionTargetError);
+
+        await expect(
+          svc.requestCorrection(ctx, employeeGraceId, {
+            workDate: "2026-03-12",
+            fieldChanged: "BREAK_START",
+            eventId: breakStart.id,
+            correctedValue: new Date("2026-03-12T13:45:00Z"), // after the 13:30 break-end
+            reason: "Typo — should never be accepted",
+          }),
+        ).rejects.toThrow(errors.InvalidCorrectionTargetError);
+      });
+
+      it("still accepts a validly-ordered BREAK_START correction and recalculates break minutes correctly once approved", async () => {
+        vi.setSystemTime(new Date("2026-03-13T09:00:00Z"));
+        await svc.checkIn(ctx, employeeGraceId);
+        vi.setSystemTime(new Date("2026-03-13T13:00:00Z"));
+        const breakStart = await svc.startBreak(ctx, employeeGraceId);
+        vi.setSystemTime(new Date("2026-03-13T13:30:00Z"));
+        await svc.endBreak(ctx, employeeGraceId);
+        vi.setSystemTime(new Date("2026-03-13T18:00:00Z"));
+        await svc.checkOut(ctx, employeeGraceId);
+
+        const before = await svc.getAttendanceDay(ctx, employeeGraceId, "2026-03-13");
+        expect(before.record.breakMinutes).toBe(30);
+
+        const correction = await svc.requestCorrection(ctx, employeeGraceId, {
+          workDate: "2026-03-13",
+          fieldChanged: "BREAK_START",
+          eventId: breakStart.id,
+          correctedValue: new Date("2026-03-13T12:45:00Z"), // still after check-in, still before break-end
+          reason: "Break actually started 15 minutes earlier",
+        });
+        await svc.approveCorrection(ctx, correction.id);
+
+        const after = await svc.getAttendanceDay(ctx, employeeGraceId, "2026-03-13");
+        expect(after.record.breakMinutes).toBe(45); // 12:45-13:30
+      });
     });
 
     it("an APPROVED missing-checkout correction recalculates the day (no longer INCOMPLETE); PENDING and REJECTED have no effect", async () => {

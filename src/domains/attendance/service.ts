@@ -23,6 +23,7 @@ import {
   ConflictingCorrectionError,
   CorrectionAlreadyReviewedError,
   DuplicateAttendanceEventError,
+  EmployeeNotEligibleForProcessingError,
   InvalidCorrectionEventError,
   InvalidCorrectionTargetError,
   NoOpenBreakError,
@@ -122,7 +123,18 @@ async function resolveCheckInContext(ctx: RequestContext, employeeId: string, ch
 export async function checkIn(ctx: RequestContext, requestedEmployeeId: string, input: CheckInInput = {}): Promise<AttendanceSession> {
   requirePermission(ctx, "attendance.check_in");
   const targetEmployeeId = resolveTargetEmployeeId(ctx, requestedEmployeeId);
-  await loadEmployeeInCompany(ctx, targetEmployeeId);
+  const employee = await loadEmployeeInCompany(ctx, targetEmployeeId);
+
+  // Batch 11 hardening — mirrors attendance-processing.service.ts's `assertEligible`: an
+  // archived or non-ACTIVE employee (resigned, terminated, suspended, etc.) must not be able to
+  // open a brand-new attendance session. Deliberately checked only here, not in
+  // `loadEmployeeInCompany` (shared by every attendance function, including read paths like
+  // `getAttendanceDay`/`listAttendanceForEmployee`) — HR must still be able to view an archived
+  // employee's historical attendance, and check-out/break-end must still be able to close out a
+  // session that was legitimately opened before the employee's status changed.
+  if (employee.isArchived || employee.employmentStatus !== "ACTIVE") {
+    throw new EmployeeNotEligibleForProcessingError();
+  }
 
   if (input.idempotencyKey) {
     const existingEvent = await attendanceEventRepository.findByIdempotencyKey(targetEmployeeId, input.idempotencyKey);
@@ -704,6 +716,69 @@ export async function listAttendanceForEmployee(
 // day is recalculated in the same transaction that approves it (§7) — never a synthetic event.
 // ---------------------------------------------------------------------------
 
+/**
+ * Batch 11 hardening — nothing previously checked that a correction's proposed value keeps its
+ * target session's own event ordering valid (check-in before check-out, break-start before
+ * break-end). Without this, an out-of-order value (e.g. a CHECK_OUT corrected to a time before
+ * its session's CHECK_IN) would be accepted at request time and, once approved, silently produce
+ * a negative `workedMinutes`/`breakMinutes` the next time `calculateDailyAttendance` runs —
+ * `diffMinutes` has no floor at zero. Compared only against the target session's OTHER,
+ * uncorrected timestamps (never against the value this same correction is replacing). Deliberately
+ * request-time only, not re-checked on every later recalculation — re-validating at every
+ * recalculation would let unrelated future activity permanently break recalculation for a day
+ * whose correction was valid when it was approved, which is a worse failure mode than the narrow,
+ * harder-to-hit race this doesn't cover (further attendance activity changing the comparison
+ * timestamp between this request and its eventual approval).
+ */
+async function assertCorrectionTimestampOrdering(
+  fieldChanged: AttendanceCorrectionField,
+  correctedValue: Date,
+  sessionId: string | null,
+  eventId: string | null,
+  executor: DbExecutor,
+): Promise<void> {
+  if (!sessionId) return; // Missing-punch CHECK_IN with no session yet — nothing to compare against.
+  const session = await attendanceSessionRepository.findById(sessionId, executor);
+  if (!session) return;
+
+  if (fieldChanged === "CHECK_IN") {
+    if (session.checkOutAt && correctedValue.getTime() >= session.checkOutAt.getTime()) {
+      throw new InvalidCorrectionTargetError("The corrected check-in time must be before this session's check-out time.");
+    }
+    return;
+  }
+
+  if (fieldChanged === "CHECK_OUT") {
+    if (correctedValue.getTime() <= session.checkInAt.getTime()) {
+      throw new InvalidCorrectionTargetError("The corrected check-out time must be after this session's check-in time.");
+    }
+    return;
+  }
+
+  // BREAK_START / BREAK_END: compare against the specific break pair this correction targets.
+  // For a missing-punch BREAK_END (eventId null), the open break's own endEventId is also null,
+  // so it is still found correctly — resolveMissingPunchSessionId already confirmed it is unique.
+  const breaks = await attendanceEventRepository.listBreaksForSession(sessionId, executor);
+  const brk = breaks.find((b) => b.startEventId === eventId || b.endEventId === eventId);
+  if (!brk) return;
+
+  if (fieldChanged === "BREAK_START") {
+    if (correctedValue.getTime() <= session.checkInAt.getTime()) {
+      throw new InvalidCorrectionTargetError("The corrected break-start time must be after this session's check-in time.");
+    }
+    if (brk.endAt && correctedValue.getTime() >= brk.endAt.getTime()) {
+      throw new InvalidCorrectionTargetError("The corrected break-start time must be before this break's end time.");
+    }
+  } else if (fieldChanged === "BREAK_END") {
+    if (correctedValue.getTime() <= brk.startAt.getTime()) {
+      throw new InvalidCorrectionTargetError("The corrected break-end time must be after this break's start time.");
+    }
+    if (session.checkOutAt && correctedValue.getTime() >= session.checkOutAt.getTime()) {
+      throw new InvalidCorrectionTargetError("The corrected break-end time must be before this session's check-out time.");
+    }
+  }
+}
+
 export async function requestCorrection(
   ctx: RequestContext,
   requestedEmployeeId: string,
@@ -733,17 +808,21 @@ export async function requestCorrection(
 
     let eventId: string | null = null;
     let originalValue: Date | null = null;
+    let sessionId: string | null = null;
 
     if (input.eventId) {
       const event = await resolveCorrectionEventTarget(ctx, targetEmployeeId, input.workDate, input.fieldChanged, input.eventId, tx);
       eventId = event.id;
       originalValue = event.occurredAt;
+      sessionId = event.sessionId;
     } else {
       // Confirms exactly one legitimate missing-punch target exists right now. The resolved
       // target itself isn't stored on the correction — `buildCorrectionOverride` re-resolves it
       // at approval time, since more attendance activity may have happened between request and review.
-      await resolveMissingPunchSessionId(targetEmployeeId, input.workDate, input.fieldChanged, tx);
+      sessionId = await resolveMissingPunchSessionId(targetEmployeeId, input.workDate, input.fieldChanged, tx);
     }
+
+    await assertCorrectionTimestampOrdering(input.fieldChanged, input.correctedValue, sessionId, eventId, tx);
 
     // §14: two corrections may never both end up APPROVED for the same logical (employeeId,
     // workDate, fieldChanged, eventId) target — reject a new request that would conflict with an
