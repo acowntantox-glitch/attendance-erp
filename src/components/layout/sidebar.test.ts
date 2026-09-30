@@ -14,141 +14,70 @@ type Anchor = { href: string; text: string; current: string | null; active: bool
 function render(role: Role, pathname: string) {
   nav.pathname = pathname;
   const html = renderToStaticMarkup(createElement(Sidebar, { role }));
-
-  const anchors: Anchor[] = [...html.matchAll(/<a\b([^>]*)>(.*?)<\/a>/gs)].map((match) => {
-    const attrs = match[1]!;
-    return {
-      href: /href="([^"]*)"/.exec(attrs)![1]!,
-      text: match[2]!.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").trim(),
-      current: /aria-current="([^"]*)"/.exec(attrs)?.[1] ?? null,
-      active: /class="[^"]*bg-blue-50/.test(attrs),
-    };
-  });
-  const buttons = [...html.matchAll(/<button\b([^>]*)>/g)].map((match) => ({
-    expanded: /aria-expanded="([^"]*)"/.exec(match[1]!)?.[1] ?? null,
-    controls: /aria-controls="([^"]*)"/.exec(match[1]!)?.[1] ?? null,
-    label: /aria-label="([^"]*)"/.exec(match[1]!)?.[1] ?? null,
+  const anchors: Anchor[] = [...html.matchAll(/<a\b([^>]*)>(.*?)<\/a>/gs)].map((match) => ({
+    href: /href="([^"]*)"/.exec(match[1]!)![1]!,
+    text: match[2]!.replace(/<[^>]+>/g, "").trim(),
+    current: /aria-current="([^"]*)"/.exec(match[1]!)?.[1] ?? null,
+    active: /class="[^"]*bg-blue-50/.test(match[1]!),
   }));
-  const panelHidden = (id: string) => new RegExp(`<ul id="${id}"[^>]*\\bhidden`).test(html);
-  return { html, anchors, buttons, panelHidden, link: (href: string) => anchors.find((a) => a.href === href) };
+  return { html, anchors, active: anchors.filter((a) => a.active).map((a) => a.text) };
 }
 
 beforeEach(() => {
   nav.pathname = "/dashboard";
 });
 
-describe("Attendance navigation group", () => {
-  it("presents Attendance as ONE module with the intended order, and no stray top-level attendance links", () => {
-    const { anchors } = render("HR_ADMIN", "/dashboard");
-    const labels = anchors.map((a) => a.text);
-    expect(labels).toEqual([
-      "Dashboard",
-      "Organization",
-      "Employees",
-      "Workforce",
-      "Attendance",
-      "Overview",
-      "Calendar",
-      "Issues & Corrections",
-      "Reports", // attendance Reports (module child)
-      "Attendance Periods",
-      "Attendance Policy",
-      "Devices",
-      "Reports", // global Reports
-      "Settings", // global account Settings
-    ]);
-  });
-
-  it("collapsed and inactive outside the module", () => {
-    const { buttons, panelHidden, link } = render("HR_ADMIN", "/dashboard");
-    const attendance = buttons.find((b) => b.controls === "attendance-nav-menu")!;
-    expect(attendance.expanded).toBe("false");
-    expect(panelHidden("attendance-nav-menu")).toBe(true);
-    expect(link("/attendance")!.active).toBe(false);
-  });
-
-  it.each([
-    ["/attendance/dashboard", "Overview"],
-    ["/attendance/calendar", "Calendar"],
-    ["/attendance/issues", "Issues & Corrections"],
-    ["/attendance/reports", "Reports"],
-  ])("%s → module expanded, parent active, only %s is the current page", (path, label) => {
-    const { buttons, panelHidden, anchors, link } = render("HR_ADMIN", path);
-    expect(buttons.find((b) => b.controls === "attendance-nav-menu")!.expanded).toBe("true");
-    expect(panelHidden("attendance-nav-menu")).toBe(false);
-    expect(link("/attendance")!.active).toBe(true); // module stays visually active
-    expect(link("/attendance")!.current).toBeNull(); // ...but is not "the current page"
-
-    const current = anchors.filter((a) => a.current === "page" && a.href.startsWith("/attendance"));
-    expect(current.map((a) => a.text)).toEqual([label]);
-    // The nested Settings section stays collapsed.
-    expect(panelHidden("attendance-settings-menu")).toBe(true);
-  });
-
-  it.each([
-    ["/attendance/periods", "Attendance Periods"],
-    ["/attendance/policy", "Attendance Policy"],
-  ])("%s → module AND Settings expanded, %s active", (path, label) => {
-    const { buttons, panelHidden, anchors, link } = render("HR_ADMIN", path);
-    expect(buttons.find((b) => b.controls === "attendance-nav-menu")!.expanded).toBe("true");
-    expect(buttons.find((b) => b.controls === "attendance-settings-menu")!.expanded).toBe("true");
-    expect(panelHidden("attendance-nav-menu")).toBe(false);
-    expect(panelHidden("attendance-settings-menu")).toBe(false);
-    expect(link("/attendance")!.active).toBe(true);
-    expect(anchors.filter((a) => a.current === "page" && a.href.startsWith("/attendance")).map((a) => a.text)).toEqual([label]);
-  });
-
-  it("/attendance (My Attendance) keeps the module expanded and the parent link is the current page", () => {
-    const { link, buttons } = render("HR_ADMIN", "/attendance");
-    expect(link("/attendance")).toMatchObject({ active: true, current: "page" });
-    expect(buttons.find((b) => b.controls === "attendance-nav-menu")!.expanded).toBe("true");
-  });
-
-  it("only one attendance page is ever the current page (no double highlight of siblings)", () => {
-    const { anchors } = render("HR_ADMIN", "/attendance/issues");
-    const highlighted = anchors.filter((a) => a.active && a.href.startsWith("/attendance/") && a.href !== "/attendance");
-    expect(highlighted.map((a) => a.href)).toEqual(["/attendance/issues"]);
-  });
-
-  it("has accessible expandable controls: buttons with aria-expanded/aria-controls that point at real panels", () => {
-    const { html, buttons } = render("HR_ADMIN", "/attendance/reports");
-    expect(buttons).toHaveLength(2);
-    for (const button of buttons) {
-      expect(button.expanded).toMatch(/^(true|false)$/);
-      expect(html).toContain(`id="${button.controls}"`);
-    }
-    expect(buttons[0]!.label).toBe("Attendance menu");
-    expect(html).toContain('aria-label="Main navigation"');
-    expect(html).toContain("focus-visible:ring-2");
-  });
-});
-
-describe("Attendance navigation — role visibility (UI only; pages/services still enforce)", () => {
-  it("EMPLOYEE gets just the Attendance link: no chevron, no management links, still reaches /attendance", () => {
-    const { anchors, buttons, html } = render("EMPLOYEE", "/attendance");
-    expect(buttons).toHaveLength(0);
-    expect(anchors.some((a) => a.href === "/attendance")).toBe(true);
+describe("global sidebar — Attendance is a single entry", () => {
+  it("has exactly one Attendance link and NONE of the module's pages as sidebar items", () => {
+    const { anchors } = render("COMPANY_ADMIN", "/dashboard");
+    expect(anchors.map((a) => a.text)).toEqual(["Dashboard", "Organization", "Employees", "Workforce", "Attendance", "Devices", "Reports", "Settings"]);
     expect(anchors.filter((a) => a.href.startsWith("/attendance/"))).toHaveLength(0);
+    for (const removed of ["Overview", "Calendar", "Issues & Corrections", "Attendance Periods", "Attendance Policy"]) {
+      expect(anchors.map((a) => a.text)).not.toContain(removed);
+    }
+  });
+
+  it("the Attendance entry still goes to /attendance (self-service) for every role", () => {
+    for (const role of ["COMPANY_ADMIN", "HR_ADMIN", "HR_MANAGER", "MANAGER", "EMPLOYEE"] as const) {
+      const { anchors } = render(role, "/dashboard");
+      expect(anchors.filter((a) => a.text === "Attendance").map((a) => a.href)).toEqual(["/attendance"]);
+    }
+  });
+
+  it("has no expandable controls left over from the previous design", () => {
+    const { html } = render("HR_ADMIN", "/attendance/reports");
+    expect(html).not.toContain("<button");
+    expect(html).not.toContain("aria-expanded");
     expect(html).not.toContain("attendance-nav-menu");
   });
 
-  it("MANAGER sees the Overview only — no Settings section", () => {
-    const { anchors, buttons } = render("MANAGER", "/dashboard");
-    expect(anchors.filter((a) => a.href.startsWith("/attendance/")).map((a) => a.text)).toEqual(["Overview"]);
-    expect(buttons.map((b) => b.controls)).toEqual(["attendance-nav-menu"]);
+  it.each(["/attendance", "/attendance/dashboard", "/attendance/calendar", "/attendance/issues", "/attendance/reports", "/attendance/periods", "/attendance/policy"])(
+    "%s → only the Attendance entry is highlighted (no duplicate active items)",
+    (path) => {
+      expect(render("HR_ADMIN", path).active).toEqual(["Attendance"]);
+    },
+  );
+
+  it("marks /attendance as the current page; sub-pages highlight the module without claiming to be the page", () => {
+    expect(render("HR_ADMIN", "/attendance").anchors.find((a) => a.text === "Attendance")!.current).toBe("page");
+    expect(render("HR_ADMIN", "/attendance/reports").anchors.find((a) => a.text === "Attendance")!.current).toBeNull();
   });
 
-  it("HR_MANAGER sees Policy but not Attendance Periods under Settings", () => {
-    const { anchors } = render("HR_MANAGER", "/dashboard");
-    const attendanceLinks = anchors.filter((a) => a.href.startsWith("/attendance/")).map((a) => a.text);
-    expect(attendanceLinks).toEqual(["Overview", "Calendar", "Issues & Corrections", "Reports", "Attendance Policy"]);
+  it("other sections are untouched: highlighting follows their own paths", () => {
+    expect(render("HR_ADMIN", "/employees/abc").active).toEqual(["Employees"]);
+    expect(render("HR_ADMIN", "/workforce/shifts").active).toEqual(["Workforce"]);
+    expect(render("HR_ADMIN", "/settings").active).toEqual(["Settings"]);
   });
 
-  it("all six existing URLs are still linked for a full administrator (no route was renamed)", () => {
-    const { anchors } = render("COMPANY_ADMIN", "/dashboard");
-    const hrefs = anchors.map((a) => a.href);
-    for (const href of ["/attendance/dashboard", "/attendance/calendar", "/attendance/issues", "/attendance/reports", "/attendance/periods", "/attendance/policy"]) {
-      expect(hrefs).toContain(href);
-    }
+  it("keeps role gating of the rest of the sidebar and the My Profile link", () => {
+    const employee = render("EMPLOYEE", "/attendance").anchors.map((a) => a.text);
+    expect(employee).toEqual(["Dashboard", "Attendance", "Devices", "Settings", "My Profile"]);
+    expect(render("HR_ADMIN", "/dashboard").anchors.map((a) => a.text)).not.toContain("My Profile");
+  });
+
+  it("uses a labelled navigation landmark and visible focus styles", () => {
+    const { html } = render("HR_ADMIN", "/dashboard");
+    expect(html).toContain('aria-label="Main navigation"');
+    expect(html).toContain("focus-visible:ring-2");
   });
 });

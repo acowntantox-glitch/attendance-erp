@@ -20,7 +20,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
   return (
     <div className="flex min-h-screen bg-slate-50">
       <Sidebar role={ctx.role} />
-      <div className="flex min-h-screen flex-1 flex-col">
+      {/* min-w-0: lets this column shrink to the viewport so wide content (tables, the Attendance tab bar) scrolls inside its own container instead of stretching the whole page on narrow screens. */}
+      <div className="flex min-h-screen min-w-0 flex-1 flex-col">
         <TopNav companyName={company.name} fullName={user?.fullName ?? ctx.userEmail} role={ctx.role} />
         <main className="flex-1 p-6">{children}</main>
       </div>

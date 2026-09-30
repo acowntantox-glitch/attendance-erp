@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ROLES, type Role } from "@/lib/auth/rbac";
-import { getAttendanceNav, isActivePath, resolveGroupOpen } from "./attendance-nav";
+import { getAttendanceModuleNav, getAttendanceNav, isActivePath } from "./attendance-nav";
 
 const hrefs = (role: Role) => {
   const nav = getAttendanceNav(role);
@@ -73,20 +73,74 @@ describe("isActivePath", () => {
   });
 });
 
-describe("resolveGroupOpen", () => {
-  it("uses the automatic state when the user has not toggled", () => {
-    expect(resolveGroupOpen(true, null, "/attendance/calendar")).toBe(true);
-    expect(resolveGroupOpen(false, null, "/dashboard")).toBe(false);
+describe("getAttendanceModuleNav — the horizontal bar", () => {
+  const labels = (tabs: { label: string }[]) => tabs.map((t) => t.label);
+  const activeLabels = (tabs: { label: string; active: boolean }[]) => tabs.filter((t) => t.active).map((t) => t.label);
+
+  it("shows Overview, Calendar, Issues & Corrections, Reports, Settings for a full administrator", () => {
+    const { tabs } = getAttendanceModuleNav("HR_ADMIN", "/attendance/dashboard");
+    expect(labels(tabs)).toEqual(["Overview", "Calendar", "Issues & Corrections", "Reports", "Settings"]);
+    expect(tabs.map((t) => t.href)).toEqual([
+      "/attendance/dashboard",
+      "/attendance/calendar",
+      "/attendance/issues",
+      "/attendance/reports",
+      "/attendance/periods", // Settings opens the first Settings page the role may use
+    ]);
   });
 
-  it("honours a manual toggle on the page it was made on", () => {
-    expect(resolveGroupOpen(true, { path: "/attendance/calendar", open: false }, "/attendance/calendar")).toBe(false);
-    expect(resolveGroupOpen(false, { path: "/dashboard", open: true }, "/dashboard")).toBe(true);
+  it.each([
+    ["/attendance/dashboard", "Overview"],
+    ["/attendance/calendar", "Calendar"],
+    ["/attendance/issues", "Issues & Corrections"],
+    ["/attendance/reports", "Reports"],
+    ["/attendance/periods", "Settings"],
+    ["/attendance/policy", "Settings"],
+  ])("%s → exactly one active tab: %s", (path, expected) => {
+    const { tabs } = getAttendanceModuleNav("COMPANY_ADMIN", path);
+    expect(activeLabels(tabs)).toEqual([expected]);
   });
 
-  it("returns to the automatic state after navigating — being inside Attendance always shows it expanded", () => {
-    const collapsedOnCalendar = { path: "/attendance/calendar", open: false };
-    expect(resolveGroupOpen(true, collapsedOnCalendar, "/attendance/issues")).toBe(true);
-    expect(resolveGroupOpen(false, { path: "/dashboard", open: true }, "/employees")).toBe(false);
+  it("the self-service page (/attendance) and unrelated paths activate NO tab (no broad /attendance match)", () => {
+    for (const path of ["/attendance", "/dashboard", "/employees/1/attendance", "/attendance-old"]) {
+      expect(activeLabels(getAttendanceModuleNav("COMPANY_ADMIN", path).tabs)).toEqual([]);
+    }
+  });
+
+  it("sub-paths keep their tab active (e.g. a deep link under Issues)", () => {
+    expect(activeLabels(getAttendanceModuleNav("COMPANY_ADMIN", "/attendance/issues/anything").tabs)).toEqual(["Issues & Corrections"]);
+  });
+
+  it("the secondary row (Attendance Periods | Attendance Policy) appears ONLY inside Settings, with the right item active", () => {
+    expect(getAttendanceModuleNav("COMPANY_ADMIN", "/attendance/dashboard").secondary).toBeNull();
+    expect(getAttendanceModuleNav("COMPANY_ADMIN", "/attendance/reports").secondary).toBeNull();
+
+    const periods = getAttendanceModuleNav("COMPANY_ADMIN", "/attendance/periods").secondary!;
+    expect(labels(periods)).toEqual(["Attendance Periods", "Attendance Policy"]);
+    expect(activeLabels(periods)).toEqual(["Attendance Periods"]);
+
+    const policy = getAttendanceModuleNav("COMPANY_ADMIN", "/attendance/policy").secondary!;
+    expect(activeLabels(policy)).toEqual(["Attendance Policy"]);
+  });
+
+  it("HR_MANAGER: Settings opens Policy (the only page they may use) and there is no pointless one-item second row", () => {
+    const { tabs, secondary } = getAttendanceModuleNav("HR_MANAGER", "/attendance/policy");
+    expect(tabs.find((t) => t.label === "Settings")).toMatchObject({ href: "/attendance/policy", active: true });
+    expect(secondary).toBeNull();
+    expect(labels(tabs)).toEqual(["Overview", "Calendar", "Issues & Corrections", "Reports", "Settings"]);
+  });
+
+  it("MANAGER sees only Overview; EMPLOYEE gets no bar at all (self-service is untouched)", () => {
+    expect(labels(getAttendanceModuleNav("MANAGER", "/attendance").tabs)).toEqual(["Overview"]);
+    expect(getAttendanceModuleNav("EMPLOYEE", "/attendance")).toEqual({ tabs: [], secondary: null });
+  });
+
+  it("never offers a tab the role could not open before (same rules as the visibility matrix)", () => {
+    for (const role of ROLES) {
+      const shown = new Set(getAttendanceModuleNav(role, "/attendance/periods").tabs.map((t) => t.href));
+      const nav = getAttendanceNav(role);
+      for (const link of nav.items) expect(shown.has(link.href)).toBe(true);
+      expect(shown.size).toBe(nav.items.length + (nav.settings.length > 0 ? 1 : 0));
+    }
   });
 });
