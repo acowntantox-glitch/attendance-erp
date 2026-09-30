@@ -31,7 +31,8 @@ export function LoginForm({ redirectTo }: { redirectTo: string }) {
       return;
     }
 
-    router.push(redirectTo);
+    const body = await response.json().catch(() => null);
+    router.push(body?.data?.mustChangePassword ? "/change-password" : redirectTo);
     router.refresh();
   }
 

@@ -1,6 +1,6 @@
 import { cache } from "react";
 import { cookies, headers } from "next/headers";
-import { AuthenticationError, AuthorizationError } from "@/lib/errors";
+import { AuthenticationError, AuthorizationError, PasswordChangeRequiredError } from "@/lib/errors";
 // A per-request lookup, not cached on the session row — acceptable at current scale; if this
 // becomes a hot path, the next step is storing employeeId on the session at login/link time
 // instead of resolving it here on every request.
@@ -29,7 +29,7 @@ export type RequestContext = {
  * scoped to a single server request/render only (Next.js resets it per request); it never persists
  * across requests, users, or companies, so it cannot leak one caller's context into another's.
  */
-export const getRequestContext = cache(async (): Promise<RequestContext> => {
+const resolveRequestContext = cache(async (): Promise<RequestContext & { mustChangePassword: boolean }> => {
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE_NAME)?.value;
   if (!token) {
@@ -57,7 +57,26 @@ export const getRequestContext = cache(async (): Promise<RequestContext> => {
     companyId: session.company.companyId,
     role: session.company.role,
     employeeId: employee?.id ?? null,
+    mustChangePassword: session.user.mustChangePassword,
   };
+});
+
+/**
+ * The context every page and API route uses. An account that must change its password (after an
+ * administrator reset) gets `PasswordChangeRequiredError` here, so it cannot reach ANY other
+ * feature — the rule lives in this one resolver rather than being re-checked per route.
+ */
+export const getRequestContext = cache(async (): Promise<RequestContext> => {
+  const { mustChangePassword, ...ctx } = await resolveRequestContext();
+  if (mustChangePassword) throw new PasswordChangeRequiredError();
+  return ctx;
+});
+
+/** The only escape hatch: used solely by the change-password page/route (and nothing else) so a
+ *  forced change can actually be completed. Still requires a valid session. */
+export const getRequestContextAllowingPasswordChange = cache(async (): Promise<RequestContext> => {
+  const { mustChangePassword: _mustChangePassword, ...ctx } = await resolveRequestContext();
+  return ctx;
 });
 
 export function requirePermission(ctx: RequestContext, permission: Permission): void {

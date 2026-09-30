@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getRequestContext } from "@/lib/auth/request-context";
+import { PasswordChangeRequiredError } from "@/lib/errors";
 import { LoginForm } from "@/components/auth/login-form";
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -12,7 +13,8 @@ export default async function LoginPage({
   try {
     await getRequestContext();
     authenticated = true;
-  } catch {
+  } catch (error) {
+    if (error instanceof PasswordChangeRequiredError) redirect("/change-password");
     authenticated = false;
   }
 

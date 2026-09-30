@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { can, canReviewAttendanceCorrection, getMinimumAttendanceCorrectionApproverRole, permissionsForRole, ROLES } from "./rbac";
+import { can, canManageUserRole, canReviewAttendanceCorrection, getMinimumAttendanceCorrectionApproverRole, permissionsForRole, ROLES } from "./rbac";
 
 describe("rbac", () => {
   it("grants SUPER_ADMIN and COMPANY_ADMIN every permission", () => {
@@ -112,5 +112,40 @@ describe("attendance.process.view (Batch 13)", () => {
     expect(can("HR_MANAGER", "attendance.process.view")).toBe(true);
     expect(can("MANAGER", "attendance.process.view")).toBe(false);
     expect(can("EMPLOYEE", "attendance.process.view")).toBe(false);
+  });
+});
+
+describe("user management permissions (Batch 15)", () => {
+  it("user.manage is held only by HR_ADMIN and the two admin roles", () => {
+    for (const role of ["SUPER_ADMIN", "COMPANY_ADMIN", "HR_ADMIN"] as const) expect(can(role, "user.manage")).toBe(true);
+    for (const role of ["HR_MANAGER", "MANAGER", "EMPLOYEE"] as const) expect(can(role, "user.manage")).toBe(false);
+  });
+
+  it("canManageUserRole: nobody manages a higher rank; HR_ADMIN cannot touch admins or peers", () => {
+    expect(canManageUserRole("HR_ADMIN", "COMPANY_ADMIN")).toBe(false);
+    expect(canManageUserRole("HR_ADMIN", "SUPER_ADMIN")).toBe(false);
+    expect(canManageUserRole("HR_ADMIN", "HR_ADMIN")).toBe(false);
+    expect(canManageUserRole("HR_ADMIN", "HR_MANAGER")).toBe(true);
+    expect(canManageUserRole("HR_ADMIN", "MANAGER")).toBe(true);
+    expect(canManageUserRole("HR_ADMIN", "EMPLOYEE")).toBe(true);
+  });
+
+  it("COMPANY_ADMIN manages everyone except SUPER_ADMIN; SUPER_ADMIN manages anyone", () => {
+    expect(canManageUserRole("COMPANY_ADMIN", "SUPER_ADMIN")).toBe(false);
+    for (const target of ["COMPANY_ADMIN", "HR_ADMIN", "HR_MANAGER", "MANAGER", "EMPLOYEE"] as const) {
+      expect(canManageUserRole("COMPANY_ADMIN", target)).toBe(true);
+    }
+    for (const target of ROLES) expect(canManageUserRole("SUPER_ADMIN", target)).toBe(true);
+  });
+
+  it("for every non-admin actor the rule is exactly 'strictly higher rank' (holding user.manage is checked separately)", () => {
+    const order = ["EMPLOYEE", "MANAGER", "HR_MANAGER", "HR_ADMIN"] as const;
+    for (const actor of order) {
+      for (const target of ROLES) {
+        const targetRank = order.indexOf(target as (typeof order)[number]);
+        const expected = targetRank !== -1 && order.indexOf(actor) > targetRank;
+        expect(canManageUserRole(actor, target)).toBe(expected);
+      }
+    }
   });
 });

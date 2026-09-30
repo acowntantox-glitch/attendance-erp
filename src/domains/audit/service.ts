@@ -2,7 +2,16 @@ import type { RequestContext } from "@/lib/auth/request-context";
 import { logger } from "@/lib/logger";
 import { auditLogRepository } from "./repository";
 
-const REDACTED_KEYS = new Set(["passwordHash", "password", "sessionToken", "biometricTemplate"]);
+const REDACTED_KEYS = new Set([
+  "passwordHash",
+  "password",
+  "currentPassword",
+  "newPassword",
+  "confirmPassword",
+  "temporaryPassword",
+  "sessionToken",
+  "biometricTemplate",
+]);
 
 function redact(value: unknown): unknown {
   if (value === null || typeof value !== "object") return value;
@@ -31,7 +40,7 @@ export type RecordAuditLogInput = {
  */
 /** The subset of a `RequestContext` the audit trail needs. A system actor (scheduled job) has a
  *  company but no user: pass `userId: null` and mark `metadata.actor: "system"`. */
-export type SystemAuditContext = { companyId: string; requestId?: string; userId?: null };
+export type SystemAuditContext = { companyId: string; requestId?: string; userId?: string | null };
 export type AuditContext = RequestContext | SystemAuditContext;
 
 export async function recordAuditLog(ctx: AuditContext | null, input: RecordAuditLogInput): Promise<void> {

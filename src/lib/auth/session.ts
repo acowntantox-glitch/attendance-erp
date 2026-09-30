@@ -1,6 +1,6 @@
 import { randomBytes, createHash } from "node:crypto";
 import { and, eq } from "drizzle-orm";
-import { db } from "@/db/client";
+import { db, type DbExecutor } from "@/db/client";
 import { companyMemberships, sessions, type roleEnum } from "@/db/schema";
 export { SESSION_COOKIE_NAME } from "./constants";
 
@@ -11,6 +11,8 @@ export type SessionUser = {
   id: string;
   email: string;
   fullName: string;
+  /** True after an admin reset until the user sets their own password. */
+  mustChangePassword: boolean;
 };
 
 export type SessionCompanyContext = {
@@ -93,7 +95,7 @@ export async function validateSessionToken(token: string): Promise<ValidatedSess
   return {
     sessionId,
     expiresAt,
-    user: { id: row.user.id, email: row.user.email, fullName: row.user.fullName },
+    user: { id: row.user.id, email: row.user.email, fullName: row.user.fullName, mustChangePassword: row.user.mustChangePassword },
     company,
   };
 }
@@ -103,6 +105,14 @@ export async function invalidateSession(token: string): Promise<void> {
   await db.delete(sessions).where(eq(sessions.id, sessionId));
 }
 
-export async function invalidateAllSessionsForUser(userId: string): Promise<void> {
-  await db.delete(sessions).where(eq(sessions.userId, userId));
+/** Revokes every session of a user, in every company. Takes an executor so it can run inside the
+ *  same transaction as the password/status change that requires it (all-or-nothing). */
+export async function invalidateAllSessionsForUser(userId: string, executor: DbExecutor = db): Promise<void> {
+  await executor.delete(sessions).where(eq(sessions.userId, userId));
+}
+
+/** Revokes a user's sessions for ONE company only — used when a company deactivates a member who
+ *  may still be an active member of other companies. */
+export async function invalidateSessionsForUserInCompany(userId: string, companyId: string, executor: DbExecutor = db): Promise<void> {
+  await executor.delete(sessions).where(and(eq(sessions.userId, userId), eq(sessions.companyId, companyId)));
 }

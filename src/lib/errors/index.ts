@@ -6,7 +6,9 @@ export type ErrorCode =
   | "CONFLICT"
   | "BUSINESS_RULE_VIOLATION"
   | "INTERNAL_ERROR"
-  | "SERVICE_UNAVAILABLE";
+  | "SERVICE_UNAVAILABLE"
+  | "RATE_LIMITED"
+  | "PASSWORD_CHANGE_REQUIRED";
 
 export class AppError extends Error {
   readonly code: ErrorCode;
@@ -55,6 +57,21 @@ export class ConflictError extends AppError {
 export class BusinessRuleError extends AppError {
   constructor(message: string) {
     super("BUSINESS_RULE_VIOLATION", message, 422);
+  }
+}
+
+/** 429 — too many attempts in a bounded window. The message is deliberately generic. */
+export class TooManyRequestsError extends AppError {
+  constructor(message = "Too many attempts. Please wait a few minutes and try again.") {
+    super("RATE_LIMITED", message, 429);
+  }
+}
+
+/** 403 — the account is signed in but must set a new password (e.g. after an admin reset) before
+ *  it may use anything else. Carries its own code so the UI can route to the change-password page. */
+export class PasswordChangeRequiredError extends AppError {
+  constructor() {
+    super("PASSWORD_CHANGE_REQUIRED", "You must change your password before continuing.", 403);
   }
 }
 

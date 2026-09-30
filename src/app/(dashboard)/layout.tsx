@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getRequestContext } from "@/lib/auth/request-context";
+import { PasswordChangeRequiredError } from "@/lib/errors";
 import { getMyCompany } from "@/domains/organization/service";
 import { userRepository } from "@/domains/auth/repository";
 import { Sidebar } from "@/components/layout/sidebar";
@@ -9,8 +10,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
   let ctx;
   try {
     ctx = await getRequestContext();
-  } catch {
-    redirect("/login");
+  } catch (error) {
+    // An account whose password an administrator reset can reach nothing but the change-password page.
+    redirect(error instanceof PasswordChangeRequiredError ? "/change-password" : "/login");
   }
 
   const [company, user] = await Promise.all([getMyCompany(ctx), userRepository.findById(ctx.userId)]);

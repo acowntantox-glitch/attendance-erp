@@ -5,6 +5,7 @@ import { loginSchema } from "@/validations/auth";
 import { login } from "@/domains/auth/service";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { isProduction } from "@/config/env";
+import { getClientIp } from "@/domains/auth/rate-limit.service";
 
 export const POST = withApiHandler(async (_requestId, request: Request) => {
   const body = await request.json().catch(() => null);
@@ -13,7 +14,7 @@ export const POST = withApiHandler(async (_requestId, request: Request) => {
     throw new ValidationError("Invalid login request.", parsed.error.flatten());
   }
 
-  const result = await login(parsed.data.email, parsed.data.password, parsed.data.companyId);
+  const result = await login(parsed.data.email, parsed.data.password, parsed.data.companyId, getClientIp(request.headers));
 
   const cookieStore = await cookies();
   cookieStore.set(SESSION_COOKIE_NAME, result.token, {
@@ -24,5 +25,5 @@ export const POST = withApiHandler(async (_requestId, request: Request) => {
     expires: result.expiresAt,
   });
 
-  return apiSuccess({ user: result.user, company: result.company });
+  return apiSuccess({ user: result.user, company: result.company, mustChangePassword: result.user.mustChangePassword });
 });

@@ -315,3 +315,31 @@ export function canReviewAttendanceCorrection(requesterRole: Role, approverRole:
   if (approverRank === undefined) return false;
   return approverRank >= ATTENDANCE_CORRECTION_APPROVER_RANK[minimumRole as AttendanceCorrectionApproverRole];
 }
+
+// ---------------------------------------------------------------------------
+// User-management hierarchy (Batch 15). `user.manage` alone must not let an HR_ADMIN reset a
+// COMPANY_ADMIN's password (that is account takeover / privilege escalation), so who may manage whom
+// is an explicit, named rule — deliberately not derived from the order of the `ROLES` array. Like the
+// correction-approval hierarchy above, it only says WHO MAY ACT ON WHOM; holding `user.manage` is
+// still checked separately, and acting on oneself is refused separately by the caller.
+// ---------------------------------------------------------------------------
+
+const USER_MANAGEMENT_RANK: Record<Role, number> = {
+  EMPLOYEE: 0,
+  MANAGER: 1,
+  HR_MANAGER: 2,
+  HR_ADMIN: 3,
+  COMPANY_ADMIN: 4,
+  SUPER_ADMIN: 5,
+};
+
+/**
+ * Whether `actorRole` may activate/deactivate or reset the password of a user whose role in the same
+ * company is `targetRole`: strictly lower rank, except that COMPANY_ADMIN may also manage another
+ * COMPANY_ADMIN and SUPER_ADMIN may manage anyone. Nobody manages a higher rank.
+ */
+export function canManageUserRole(actorRole: Role, targetRole: Role): boolean {
+  if (actorRole === "SUPER_ADMIN") return true;
+  if (actorRole === "COMPANY_ADMIN") return USER_MANAGEMENT_RANK[targetRole] <= USER_MANAGEMENT_RANK.COMPANY_ADMIN;
+  return USER_MANAGEMENT_RANK[actorRole] > USER_MANAGEMENT_RANK[targetRole];
+}

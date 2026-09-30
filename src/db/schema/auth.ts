@@ -1,4 +1,4 @@
-import { boolean, index, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
+import { boolean, index, integer, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 import { id, timestamps } from "./common";
 import { companies } from "./organization";
 
@@ -19,6 +19,10 @@ export const users = pgTable("users", {
   passwordHash: text("password_hash").notNull(),
   fullName: text("full_name").notNull(),
   status: userStatusEnum().notNull().default("active"),
+  // Set when an administrator resets the password (the temporary password is known to that admin);
+  // cleared by the user's own password change. While true the account may only reach the
+  // change-password flow (see lib/auth/request-context.ts).
+  mustChangePassword: boolean("must_change_password").notNull().default(false),
   ...timestamps,
 });
 
@@ -62,4 +66,21 @@ export const sessions = pgTable(
   },
   // Supports invalidateAllSessionsForUser() (logout-everywhere / forced revocation on role change).
   (table) => [index("sessions_user_id_idx").on(table.userId)],
+);
+
+/**
+ * Fixed-window failure counters for login and password-change abuse protection — see
+ * domains/auth/rate-limit.service.ts. One row per hashed key (`login-email:<sha256>`,
+ * `login-ip:<sha256>`, `pw-change:<sha256>`), so it never stores an email, an IP or a password, and
+ * its size is bounded by an opportunistic cleanup of rows whose window ended more than a day ago.
+ * Not tenant data: a key is not tied to any company.
+ */
+export const authRateLimits = pgTable(
+  "auth_rate_limits",
+  {
+    key: text().primaryKey(),
+    attempts: integer().notNull().default(0),
+    windowStart: timestamp("window_start", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("auth_rate_limits_window_start_idx").on(table.windowStart)],
 );
