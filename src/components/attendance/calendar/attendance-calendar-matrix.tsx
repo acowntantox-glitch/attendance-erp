@@ -75,7 +75,10 @@ function compactCounts(counts: Record<AttendanceDailyStatus, number>): { compact
 
 export function AttendanceCalendarMatrix({ result, today }: { result: AttendanceCalendarResult; today: string }) {
   if (result.rows.length === 0) {
-    return <p className="px-1 py-4 text-sm text-slate-500">No employees found for the selected filters.</p>;
+    return <div className="px-4 py-10 text-center">
+      <p className="text-sm font-medium text-slate-700">No employees found.</p>
+      <p className="mt-1 text-xs text-slate-500">Try changing or clearing the filters.</p>
+    </div>;
   }
 
   const noRecordsAtAll = result.summary.processedEmployeeDays === 0;
@@ -97,7 +100,7 @@ export function AttendanceCalendarMatrix({ result, today }: { result: Attendance
               return (
                 <TableHead key={date} className={cn("text-center", weekend && "bg-slate-100")}>
                   <div>{dayNumber}</div>
-                  <div className="text-[10px] font-normal text-slate-400">{formatWeekdayShort(date)}</div>
+                  <div className="text-[10px] font-normal text-slate-500">{formatWeekdayShort(date)}</div>
                 </TableHead>
               );
             })}
@@ -114,7 +117,7 @@ export function AttendanceCalendarMatrix({ result, today }: { result: Attendance
                   <Link href={`/employees/${row.employeeId}/attendance`} className="text-blue-700 hover:underline">
                     {employeeName}
                   </Link>
-                  <div className="text-xs text-slate-400">{row.employeeNumber}</div>
+                  <div className="text-xs text-slate-500">{row.employeeNumber}</div>
                 </TableCell>
                 {row.cells.map((cell) => (
                   <TableCell key={cell.date} className="text-center">

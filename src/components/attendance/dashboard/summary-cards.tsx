@@ -28,13 +28,13 @@ export function SummaryCards({ summary }: { summary: AttendanceDashboardSummary 
               <CardTitle className="text-xs font-medium uppercase tracking-wide text-slate-500">{card.label}</CardTitle>
             </CardHeader>
             <CardContent className="pt-0">
-              <p className="text-2xl font-semibold text-slate-900">{card.value}</p>
+              <p className="text-2xl font-semibold tabular-nums text-slate-900">{card.value}</p>
             </CardContent>
           </Card>
         ))}
       </div>
       {summary.employeesWithoutRecord > 0 && (
-        <p className="text-xs text-slate-400">
+        <p className="text-xs text-slate-500">
           {summary.employeesWithoutRecord} employee{summary.employeesWithoutRecord === 1 ? "" : "s"} have no attendance record computed for
           this date yet (no check-in, and their day hasn&apos;t been viewed) — not counted in any status above.
         </p>

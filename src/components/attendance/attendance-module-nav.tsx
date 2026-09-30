@@ -2,9 +2,9 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { cn } from "@/lib/utils";
 import type { Role } from "@/lib/auth/rbac";
 import { getAttendanceModuleNav, type AttendanceModuleTab } from "@/components/layout/attendance-nav";
+import { TabLabel, tabLinkClass, tabListClass, type TabTier } from "./attendance-tab-styles";
 
 /**
  * The Attendance module's horizontal navigation, rendered once by `attendance/layout.tsx` so every
@@ -24,29 +24,20 @@ export function AttendanceModuleNav({ role }: { role: Role }) {
   if (tabs.length === 0) return null;
 
   return (
-    <div className="space-y-2">
-      <p className="text-xs font-medium uppercase tracking-wide text-slate-400">Attendance</p>
-      <TabRow label="Attendance" tabs={tabs} />
-      {secondary && <TabRow label="Attendance settings" tabs={secondary} />}
+    <div className="space-y-1">
+      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Attendance</p>
+      <TabRow label="Attendance" tabs={tabs} tier="primary" />
+      {secondary && <TabRow label="Attendance settings" tabs={secondary} tier="secondary" />}
     </div>
   );
 }
 
-function TabRow({ label, tabs }: { label: string; tabs: AttendanceModuleTab[] }) {
+function TabRow({ label, tabs, tier }: { label: string; tabs: AttendanceModuleTab[]; tier: TabTier }) {
   return (
-    <nav aria-label={label} className="flex gap-1 overflow-x-auto rounded-lg border border-slate-200 bg-white p-1">
+    <nav aria-label={label} className={tabListClass(tier)}>
       {tabs.map((tab) => (
-        <Link
-          key={tab.href}
-          href={tab.href}
-          aria-current={tab.active ? "page" : undefined}
-          className={cn(
-            "shrink-0 whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600",
-            tab.active && "bg-blue-50 text-blue-700 hover:bg-blue-50",
-          )}
-        >
-          {tab.label}
+        <Link key={tab.href} href={tab.href} aria-current={tab.active ? "page" : undefined} className={tabLinkClass(tier, tab.active)}>
+          <TabLabel>{tab.label}</TabLabel>
         </Link>
       ))}
     </nav>

@@ -96,7 +96,7 @@ export function HistoryPanel({ employeeId }: { employeeId: string }) {
       {loading ? (
         <div className="space-y-2">
           {[0, 1, 2].map((i) => (
-            <div key={i} className="h-10 animate-pulse rounded-md bg-slate-100" />
+            <div key={i} className="h-10 motion-safe:animate-pulse rounded-md bg-slate-100" />
           ))}
         </div>
       ) : records && records.length === 0 ? (
@@ -122,12 +122,12 @@ export function HistoryPanel({ employeeId }: { employeeId: string }) {
                 <TableCell>
                   <AttendanceStatusBadge status={record.status} />
                 </TableCell>
-                <TableCell>{formatMinutesOrNull(record.scheduledMinutes)}</TableCell>
-                <TableCell>{formatMinutesOrNull(record.workedMinutes)}</TableCell>
-                <TableCell>{formatMinutesOrNull(record.breakMinutes)}</TableCell>
-                <TableCell>{formatMinutesOrNull(record.lateMinutes)}</TableCell>
-                <TableCell>{formatMinutesOrNull(record.earlyDepartureMinutes)}</TableCell>
-                <TableCell>{formatMinutesOrNull(record.overtimeMinutes)}</TableCell>
+                <TableCell className="tabular-nums">{formatMinutesOrNull(record.scheduledMinutes)}</TableCell>
+                <TableCell className="tabular-nums">{formatMinutesOrNull(record.workedMinutes)}</TableCell>
+                <TableCell className="tabular-nums">{formatMinutesOrNull(record.breakMinutes)}</TableCell>
+                <TableCell className="tabular-nums">{formatMinutesOrNull(record.lateMinutes)}</TableCell>
+                <TableCell className="tabular-nums">{formatMinutesOrNull(record.earlyDepartureMinutes)}</TableCell>
+                <TableCell className="tabular-nums">{formatMinutesOrNull(record.overtimeMinutes)}</TableCell>
               </TableRow>
             ))}
           </TableBody>

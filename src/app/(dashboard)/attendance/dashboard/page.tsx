@@ -17,6 +17,7 @@ import { DashboardFilterBar } from "@/components/attendance/dashboard/dashboard-
 import { AttendanceDashboardTable } from "@/components/attendance/dashboard/attendance-dashboard-table";
 import { RecentProcessingRuns } from "@/components/attendance/dashboard/recent-processing-runs";
 import type { AttendanceDailyStatus } from "@/domains/attendance/model";
+import { PageHeader } from "@/components/ui/page-header";
 
 type SearchParams = {
   date?: string;
@@ -47,10 +48,11 @@ export default async function AttendanceDashboardPage({ searchParams }: { search
   if (!can(ctx.role, "attendance.view")) {
     return (
       <div className="space-y-6">
-        <h1 className="text-lg font-semibold text-slate-900">Attendance Overview</h1>
+        <PageHeader title="Attendance Overview" />
         <Card>
-          <CardContent className="py-10 text-center text-sm text-slate-400">
-            You don&apos;t have permission to view the attendance dashboard.
+          <CardContent className="py-12 text-center">
+            <p className="text-sm font-medium text-slate-700">You don&apos;t have permission to view the attendance dashboard.</p>
+            <p className="mt-1 text-xs text-slate-500">Contact your administrator if you need access.</p>
           </CardContent>
         </Card>
       </div>
@@ -85,6 +87,8 @@ export default async function AttendanceDashboardPage({ searchParams }: { search
 
   return (
     <div className="space-y-6">
+      <PageHeader title="Attendance Overview" description="View your team's attendance status for today or any selected date." />
+
       <DateSelector basePath="/attendance/dashboard" date={date} today={today} otherParams={filterParams} />
 
       <SummaryCards summary={result.summary} />

@@ -35,7 +35,7 @@ export function ReportSummaryCards({
               <CardTitle className="text-xs font-medium uppercase tracking-wide text-slate-500">{card.label}</CardTitle>
             </CardHeader>
             <CardContent className="pt-0">
-              <p className="text-2xl font-semibold text-slate-900">{card.value}</p>
+              <p className="text-2xl font-semibold tabular-nums text-slate-900">{card.value}</p>
             </CardContent>
           </Card>
         ))}
@@ -47,7 +47,7 @@ export function ReportSummaryCards({
               <CardTitle className="text-xs font-medium uppercase tracking-wide text-slate-500">{card.label}</CardTitle>
             </CardHeader>
             <CardContent className="pt-0">
-              <p className="text-2xl font-semibold text-slate-900">{card.value}</p>
+              <p className="text-2xl font-semibold tabular-nums text-slate-900">{card.value}</p>
             </CardContent>
           </Card>
         ))}

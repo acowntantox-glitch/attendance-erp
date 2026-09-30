@@ -7,8 +7,8 @@ import { formatMinutesOrNull } from "../format";
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <dt className="text-xs font-medium uppercase tracking-wide text-slate-400">{label}</dt>
-      <dd className="mt-0.5 text-sm font-medium text-slate-800">{value}</dd>
+      <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</dt>
+      <dd className="mt-0.5 text-sm font-medium tabular-nums text-slate-800">{value}</dd>
     </div>
   );
 }

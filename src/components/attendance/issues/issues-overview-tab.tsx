@@ -81,7 +81,7 @@ export async function IssuesOverviewTab({ ctx }: { ctx: RequestContext }) {
               <CardTitle>Exceptions (last {LOOKBACK_DAYS} days)</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-2xl font-semibold text-slate-900">{exceptions.pagination.total}</p>
+              <p className="text-2xl font-semibold tabular-nums text-slate-900">{exceptions.pagination.total}</p>
             </CardContent>
           </Card>
         </Link>
@@ -91,7 +91,7 @@ export async function IssuesOverviewTab({ ctx }: { ctx: RequestContext }) {
               <CardTitle>Pending correction requests</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-2xl font-semibold text-slate-900">{corrections.length}</p>
+              <p className="text-2xl font-semibold tabular-nums text-slate-900">{corrections.length}</p>
             </CardContent>
           </Card>
         </Link>
@@ -100,7 +100,10 @@ export async function IssuesOverviewTab({ ctx }: { ctx: RequestContext }) {
       <Card>
         <CardContent className="p-0">
           {rows.length === 0 ? (
-            <p className="px-1 py-6 text-center text-sm text-slate-500">No open issues found.</p>
+            <div className="px-4 py-10 text-center">
+              <p className="text-sm font-medium text-slate-700">No open issues found.</p>
+              <p className="mt-1 text-xs text-slate-500">Nothing needs review right now.</p>
+            </div>
           ) : (
             <Table>
               <TableHeader>

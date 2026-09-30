@@ -73,7 +73,7 @@ export function ExceptionFilterBar({
       </div>
 
       <div className="flex flex-wrap items-center gap-4">
-        <span className="text-xs font-medium uppercase tracking-wide text-slate-400">Type</span>
+        <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Type</span>
         {TYPE_OPTIONS.map((option) => (
           <label key={option.value} className="flex items-center gap-1.5 text-sm text-slate-700">
             <input type="checkbox" name="types" value={option.value} defaultChecked={defaults.types.length === 0 || defaults.types.includes(option.value)} className="h-4 w-4 rounded border-slate-300" />

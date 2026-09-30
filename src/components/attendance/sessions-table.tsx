@@ -16,13 +16,13 @@ const SESSION_STATUS_LABEL = {
 } as const;
 
 function BreaksList({ breaks, timezone }: { breaks: AttendanceSessionView["breaks"]; timezone: string | null }) {
-  if (breaks.length === 0) return <span className="text-slate-400">None</span>;
+  if (breaks.length === 0) return <span className="text-slate-500">None</span>;
   return (
     <ul className="space-y-0.5">
       {breaks.map((b, i) => (
         <li key={b.startEventId ?? i}>
           {formatInstant(b.startAt, timezone)} – {b.endAt ? formatInstant(b.endAt, timezone) : <span className="text-blue-700">ongoing</span>}
-          {b.endAt && <span className="ml-1 text-slate-400">({formatMinutesOrNull(Math.round((b.endAt.getTime() - b.startAt.getTime()) / 60000))})</span>}
+          {b.endAt && <span className="ml-1 text-slate-500">({formatMinutesOrNull(Math.round((b.endAt.getTime() - b.startAt.getTime()) / 60000))})</span>}
         </li>
       ))}
     </ul>
@@ -70,7 +70,7 @@ export function SessionsTable({ sessions }: { sessions: AttendanceSessionView[] 
             <TableCell>
               <Badge variant={SESSION_STATUS_VARIANT[session.status]}>{SESSION_STATUS_LABEL[session.status]}</Badge>
               {session.status === "ABANDONED" && (
-                <span className="ml-2 text-xs text-slate-400">no check-out was ever recorded ({NOT_AVAILABLE.toLowerCase()})</span>
+                <span className="ml-2 text-xs text-slate-500">no check-out was ever recorded ({NOT_AVAILABLE.toLowerCase()})</span>
               )}
             </TableCell>
           </TableRow>

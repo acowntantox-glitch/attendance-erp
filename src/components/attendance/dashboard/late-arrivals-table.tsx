@@ -39,7 +39,7 @@ export function LateArrivalsTable({ rows }: { rows: LateArrivalRow[] }) {
             <TableCell>{formatInstant(row.record.firstCheckInAt, row.timezone, "—")}</TableCell>
             <TableCell>{row.scheduleName ?? "—"}</TableCell>
             <TableCell>{row.shiftName ?? "—"}</TableCell>
-            <TableCell className="font-medium text-amber-700">{formatMinutesOrNull(row.record.lateMinutes, "—")}</TableCell>
+            <TableCell className="font-medium tabular-nums text-amber-700">{formatMinutesOrNull(row.record.lateMinutes, "—")}</TableCell>
           </TableRow>
         ))}
       </TableBody>

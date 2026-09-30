@@ -113,7 +113,7 @@ export function CurrentSessionPanel({
                   Checked in at <span className="font-medium text-slate-900">{formatInstant(session.checkInAt, session.resolvedTimezone)}</span>
                 </p>
                 {session.expectedWorkSchedule && (
-                  <p className="mt-0.5 text-xs text-slate-400">
+                  <p className="mt-0.5 text-xs text-slate-500">
                     Expected shift: {session.expectedShift?.name ?? session.expectedWorkSchedule.name}
                   </p>
                 )}
@@ -153,7 +153,7 @@ export function CurrentSessionPanel({
                 </Button>
               </div>
             )}
-            {hasOpenBreak && canControl && <p className="text-xs text-slate-400">End your break before checking out.</p>}
+            {hasOpenBreak && canControl && <p className="text-xs text-slate-500">End your break before checking out.</p>}
           </div>
         )}
       </CardContent>

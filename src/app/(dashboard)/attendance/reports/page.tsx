@@ -11,6 +11,7 @@ import { ReportFilterBar } from "@/components/attendance/reports/report-filter-b
 import { ReportSummaryCards } from "@/components/attendance/reports/report-summary-cards";
 import { AttendanceReportTable } from "@/components/attendance/reports/attendance-report-table";
 import { ExportCsvButton } from "@/components/attendance/reports/export-csv-button";
+import { PageHeader } from "@/components/ui/page-header";
 
 type SearchParams = {
   fromDate?: string;
@@ -45,10 +46,11 @@ export default async function AttendanceReportsPage({ searchParams }: { searchPa
   if (!can(ctx.role, "attendance.report.view")) {
     return (
       <div className="space-y-6">
-        <h1 className="text-lg font-semibold text-slate-900">Attendance Reports</h1>
+        <PageHeader title="Attendance Reports" />
         <Card>
-          <CardContent className="py-10 text-center text-sm text-slate-400">
-            You don&apos;t have permission to view attendance reports.
+          <CardContent className="py-12 text-center">
+            <p className="text-sm font-medium text-slate-700">You don&apos;t have permission to view attendance reports.</p>
+            <p className="mt-1 text-xs text-slate-500">Contact your administrator if you need access.</p>
           </CardContent>
         </Card>
       </div>
@@ -93,10 +95,7 @@ export default async function AttendanceReportsPage({ searchParams }: { searchPa
   if (!parsed.success) {
     return (
       <div className="space-y-6">
-        <div>
-          <h1 className="text-lg font-semibold text-slate-900">Attendance Reports</h1>
-          <p className="text-sm text-slate-500">Review and export daily attendance records for a date range.</p>
-        </div>
+        <PageHeader title="Attendance Reports" description="Review and export daily attendance records for a date range." />
         <ReportFilterBar basePath="/attendance/reports" defaults={filterBarDefaults} employees={employeeOptions} departments={departmentOptions} locations={locationOptions} />
         <Card>
           <CardContent className="py-6 text-center text-sm text-red-700">
@@ -134,18 +133,16 @@ export default async function AttendanceReportsPage({ searchParams }: { searchPa
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-lg font-semibold text-slate-900">Attendance Reports</h1>
-          <p className="text-sm text-slate-500">Review and export daily attendance records for a date range.</p>
-        </div>
-        <ExportCsvButton filters={exportFilters} />
-      </div>
+      <PageHeader
+        title="Attendance Reports"
+        description="Review and export daily attendance records for a date range."
+        actions={<ExportCsvButton filters={exportFilters} />}
+      />
 
       <ReportFilterBar basePath="/attendance/reports" defaults={filterBarDefaults} employees={employeeOptions} departments={departmentOptions} locations={locationOptions} />
 
       {showUncomputedNote && (
-        <p className="text-xs text-slate-400">
+        <p className="text-xs text-slate-500">
           Some employees have no processed attendance record for this date yet. Run Process Day from the Attendance Overview.
         </p>
       )}

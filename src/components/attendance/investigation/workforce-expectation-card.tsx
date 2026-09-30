@@ -27,20 +27,20 @@ export function WorkforceExpectationCard({ dayInfo }: { dayInfo: WorkforceDayInf
         {dayInfo.scheduleAssignment ? (
           <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
             <div>
-              <dt className="text-xs font-medium uppercase tracking-wide text-slate-400">Schedule</dt>
+              <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Schedule</dt>
               <dd className="mt-0.5 text-sm font-medium text-slate-800">{dayInfo.scheduleAssignment.workSchedule.name}</dd>
             </div>
             <div>
-              <dt className="text-xs font-medium uppercase tracking-wide text-slate-400">Shift</dt>
+              <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Shift</dt>
               <dd className="mt-0.5 text-sm font-medium text-slate-800">{dayInfo.scheduleAssignment.shift?.name ?? "Schedule default hours"}</dd>
             </div>
             <div>
-              <dt className="text-xs font-medium uppercase tracking-wide text-slate-400">Expected</dt>
+              <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Expected</dt>
               <dd className="mt-0.5 text-sm font-medium text-slate-800">
                 {dayInfo.expectedWindow ? (
                   <>
                     {dayInfo.expectedWindow.start.time} → {dayInfo.expectedWindow.end.time}
-                    {dayInfo.expectedWindow.spansMidnight && <span className="ml-1 text-xs text-slate-400">(overnight)</span>}
+                    {dayInfo.expectedWindow.spansMidnight && <span className="ml-1 text-xs text-slate-500">(overnight)</span>}
                   </>
                 ) : (
                   "Not available"

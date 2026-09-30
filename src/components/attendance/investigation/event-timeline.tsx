@@ -31,7 +31,7 @@ export function EventTimeline({ events, timezone }: { events: AttendanceEvent[];
               <li key={event.id} className="flex items-baseline gap-3 text-sm">
                 <span className="w-20 shrink-0 font-mono text-slate-500">{formatInstant(event.occurredAt, timezone)}</span>
                 <span className="font-medium text-slate-800">{EVENT_LABEL[event.eventType]}</span>
-                <span className="text-xs text-slate-400">{event.source}</span>
+                <span className="text-xs text-slate-500">{event.source}</span>
               </li>
             ))}
           </ol>

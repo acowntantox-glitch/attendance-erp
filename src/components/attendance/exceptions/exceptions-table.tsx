@@ -33,7 +33,10 @@ export function detailFor(row: AttendanceExceptionView): string {
 
 export function ExceptionsTable({ items, timezone }: { items: AttendanceExceptionView[]; timezone: string }) {
   if (items.length === 0) {
-    return <p className="px-1 py-6 text-center text-sm text-slate-500">No attendance exceptions found.</p>;
+    return <div className="px-4 py-10 text-center">
+      <p className="text-sm font-medium text-slate-700">No attendance exceptions found.</p>
+      <p className="mt-1 text-xs text-slate-500">Nothing was flagged for the selected filters.</p>
+    </div>;
   }
 
   return (
@@ -58,7 +61,7 @@ export function ExceptionsTable({ items, timezone }: { items: AttendanceExceptio
             <TableRow key={key}>
               <TableCell className="font-medium text-slate-900">
                 {employeeName}
-                <div className="text-xs text-slate-400">{row.employeeNumber}</div>
+                <div className="text-xs text-slate-500">{row.employeeNumber}</div>
               </TableCell>
               <TableCell>{formatDateLabel(row.workDate)}</TableCell>
               <TableCell>{TYPE_LABEL[row.exceptionType]}</TableCell>
@@ -70,7 +73,7 @@ export function ExceptionsTable({ items, timezone }: { items: AttendanceExceptio
                 {isDismissed ? (
                   <div>
                     <Badge variant="neutral">Dismissed</Badge>
-                    <div className="mt-1 text-xs text-slate-400">
+                    <div className="mt-1 text-xs text-slate-500">
                       {formatInstantWithDate(row.dismissal!.dismissedAt, timezone)}
                       {row.dismissal!.note && <div className="italic">&ldquo;{row.dismissal!.note}&rdquo;</div>}
                     </div>

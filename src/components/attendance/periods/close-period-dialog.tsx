@@ -82,7 +82,7 @@ export function ClosePeriodDialog({ periodMonth }: { periodMonth: string }) {
             Historical attendance will remain available for viewing.
           </p>
 
-          {loadingPreview && <p className="text-slate-400">Checking for open sessions…</p>}
+          {loadingPreview && <p className="text-slate-500">Checking for open sessions…</p>}
 
           {error && (
             <div role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">

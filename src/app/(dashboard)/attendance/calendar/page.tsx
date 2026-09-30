@@ -10,6 +10,7 @@ import { CalendarMonthNav } from "@/components/attendance/calendar/calendar-mont
 import { CalendarFilterBar } from "@/components/attendance/calendar/calendar-filter-bar";
 import { CalendarSummaryCards } from "@/components/attendance/calendar/calendar-summary-cards";
 import { AttendanceCalendarMatrix } from "@/components/attendance/calendar/attendance-calendar-matrix";
+import { PageHeader } from "@/components/ui/page-header";
 
 type SearchParams = {
   month?: string;
@@ -35,10 +36,11 @@ export default async function AttendanceCalendarPage({ searchParams }: { searchP
   if (!can(ctx.role, "attendance.report.view")) {
     return (
       <div className="space-y-6">
-        <h1 className="text-lg font-semibold text-slate-900">Attendance Calendar</h1>
+        <PageHeader title="Attendance Calendar" />
         <Card>
-          <CardContent className="py-10 text-center text-sm text-slate-400">
-            You don&apos;t have permission to view the attendance calendar.
+          <CardContent className="py-12 text-center">
+            <p className="text-sm font-medium text-slate-700">You don&apos;t have permission to view the attendance calendar.</p>
+            <p className="mt-1 text-xs text-slate-500">Contact your administrator if you need access.</p>
           </CardContent>
         </Card>
       </div>
@@ -68,10 +70,7 @@ export default async function AttendanceCalendarPage({ searchParams }: { searchP
   if (!parsed.success) {
     return (
       <div className="space-y-6">
-        <div>
-          <h1 className="text-lg font-semibold text-slate-900">Attendance Calendar</h1>
-          <p className="text-sm text-slate-500">Monthly attendance matrix across your team.</p>
-        </div>
+        <PageHeader title="Attendance Calendar" description="Monthly attendance matrix across your team." />
         <Card>
           <CardContent className="py-6 text-center text-sm text-red-700">{parsed.error.issues[0]?.message ?? "Invalid filters."}</CardContent>
         </Card>
@@ -86,10 +85,7 @@ export default async function AttendanceCalendarPage({ searchParams }: { searchP
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-lg font-semibold text-slate-900">Attendance Calendar</h1>
-        <p className="text-sm text-slate-500">Monthly attendance matrix across your team, derived from already-processed daily records.</p>
-      </div>
+      <PageHeader title="Attendance Calendar" description="Monthly attendance matrix across your team, derived from already-processed daily records." />
 
       <CalendarMonthNav basePath="/attendance/calendar" month={month} prevMonth={shiftMonth(month, -1)} nextMonth={shiftMonth(month, 1)} otherParams={otherParams} />
 

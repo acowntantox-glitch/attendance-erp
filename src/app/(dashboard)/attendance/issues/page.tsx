@@ -6,6 +6,7 @@ import { ExceptionsTab, type ExceptionsTabParams } from "@/components/attendance
 import { IssuesOverviewTab } from "@/components/attendance/issues/issues-overview-tab";
 import { availableIssuesTabs, resolveIssuesAccess, resolveIssuesTab } from "@/components/attendance/issues/issues-navigation";
 import { IssuesTabs } from "@/components/attendance/issues/issues-tabs";
+import { PageHeader } from "@/components/ui/page-header";
 
 type SearchParams = ExceptionsTabParams & { tab?: string; status?: string };
 
@@ -31,10 +32,11 @@ export default async function AttendanceIssuesPage({ searchParams }: { searchPar
   if (tab === null) {
     return (
       <div className="space-y-6">
-        <h1 className="text-lg font-semibold text-slate-900">Issues &amp; Corrections</h1>
+        <PageHeader title="Issues & Corrections" />
         <Card>
-          <CardContent className="py-10 text-center text-sm text-slate-400">
-            You don&apos;t have permission to view attendance issues or correction requests.
+          <CardContent className="py-12 text-center">
+            <p className="text-sm font-medium text-slate-700">You don&apos;t have permission to view attendance issues or correction requests.</p>
+            <p className="mt-1 text-xs text-slate-500">Contact your administrator if you need access.</p>
           </CardContent>
         </Card>
       </div>
@@ -43,10 +45,7 @@ export default async function AttendanceIssuesPage({ searchParams }: { searchPar
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-lg font-semibold text-slate-900">Issues &amp; Corrections</h1>
-        <p className="text-sm text-slate-500">Review attendance problems detected by the system and requests to correct attendance records.</p>
-      </div>
+      <PageHeader title="Issues & Corrections" description="Review attendance problems detected by the system and requests to correct attendance records." />
 
       <IssuesTabs tabs={availableIssuesTabs(access)} active={tab} />
 

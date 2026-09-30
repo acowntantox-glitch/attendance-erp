@@ -79,7 +79,7 @@ export function EmployeeCorrectionsPanel({
       {corrections === null ? (
         <div className="space-y-2">
           {[0, 1].map((i) => (
-            <div key={i} className="h-10 animate-pulse rounded-md bg-slate-100" />
+            <div key={i} className="h-10 motion-safe:animate-pulse rounded-md bg-slate-100" />
           ))}
         </div>
       ) : corrections.length === 0 ? (

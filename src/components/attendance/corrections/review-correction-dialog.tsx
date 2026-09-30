@@ -163,7 +163,7 @@ export function ReviewCorrectionDialog({
             <div>
               <Label htmlFor="review-note">Review note (optional)</Label>
               <Textarea id="review-note" value={reviewNote} onChange={(e) => setReviewNote(e.target.value)} placeholder="Visible to the requester" />
-              <p className="mt-1 text-xs text-slate-400">
+              <p className="mt-1 text-xs text-slate-500">
                 Approving recalculates {employeeName}&apos;s attendance for {formatDateLabel(correction.workDate)} immediately.
               </p>
             </div>

@@ -11,7 +11,10 @@ import { formatInstant, formatMinutesOrNull } from "../format";
  */
 export function AttendanceDashboardTable({ rows }: { rows: AttendanceDashboardRow[] }) {
   if (rows.length === 0) {
-    return <p className="px-1 py-10 text-center text-sm text-slate-500">No employees match these filters.</p>;
+    return <div className="px-4 py-10 text-center">
+      <p className="text-sm font-medium text-slate-700">No employees match these filters.</p>
+      <p className="mt-1 text-xs text-slate-500">Try changing or clearing the filters.</p>
+    </div>;
   }
 
   return (
@@ -45,17 +48,17 @@ export function AttendanceDashboardTable({ rows }: { rows: AttendanceDashboardRo
               </TableCell>
               <TableCell className="font-mono text-xs">{row.employeeNumber}</TableCell>
               <TableCell>{row.department?.name ?? "—"}</TableCell>
-              <TableCell>{row.record ? <AttendanceStatusBadge status={row.record.status} /> : <span className="text-slate-400">—</span>}</TableCell>
+              <TableCell>{row.record ? <AttendanceStatusBadge status={row.record.status} /> : <span className="text-slate-500">—</span>}</TableCell>
               <TableCell>{row.scheduleName ?? "—"}</TableCell>
               <TableCell>{row.shiftName ?? "—"}</TableCell>
               <TableCell>{row.record ? formatInstant(row.record.firstCheckInAt, row.timezone, "—") : "—"}</TableCell>
               <TableCell>{row.record ? formatInstant(row.record.lastCheckOutAt, row.timezone, "—") : "—"}</TableCell>
-              <TableCell>{row.record ? formatMinutesOrNull(row.record.scheduledMinutes, "—") : "—"}</TableCell>
-              <TableCell>{row.record ? formatMinutesOrNull(row.record.workedMinutes, "—") : "—"}</TableCell>
-              <TableCell>{row.record ? formatMinutesOrNull(row.record.breakMinutes, "—") : "—"}</TableCell>
-              <TableCell>{row.record ? formatMinutesOrNull(row.record.lateMinutes, "—") : "—"}</TableCell>
-              <TableCell>{row.record ? formatMinutesOrNull(row.record.earlyDepartureMinutes, "—") : "—"}</TableCell>
-              <TableCell>{row.record ? formatMinutesOrNull(row.record.overtimeMinutes, "—") : "—"}</TableCell>
+              <TableCell className="tabular-nums">{row.record ? formatMinutesOrNull(row.record.scheduledMinutes, "—") : "—"}</TableCell>
+              <TableCell className="tabular-nums">{row.record ? formatMinutesOrNull(row.record.workedMinutes, "—") : "—"}</TableCell>
+              <TableCell className="tabular-nums">{row.record ? formatMinutesOrNull(row.record.breakMinutes, "—") : "—"}</TableCell>
+              <TableCell className="tabular-nums">{row.record ? formatMinutesOrNull(row.record.lateMinutes, "—") : "—"}</TableCell>
+              <TableCell className="tabular-nums">{row.record ? formatMinutesOrNull(row.record.earlyDepartureMinutes, "—") : "—"}</TableCell>
+              <TableCell className="tabular-nums">{row.record ? formatMinutesOrNull(row.record.overtimeMinutes, "—") : "—"}</TableCell>
             </TableRow>
           ))}
         </TableBody>

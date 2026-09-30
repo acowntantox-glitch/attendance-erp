@@ -9,7 +9,10 @@ import { formatDateLabel, formatMinutesOrNull } from "../format";
  *  `IncompleteAttendanceTable`/`LateArrivalsTable`. */
 export function AttendanceReportTable({ rows }: { rows: AttendanceReportRow[] }) {
   if (rows.length === 0) {
-    return <p className="px-1 py-4 text-sm text-slate-500">No attendance records found for the selected filters.</p>;
+    return <div className="px-4 py-10 text-center">
+      <p className="text-sm font-medium text-slate-700">No attendance records found.</p>
+      <p className="mt-1 text-xs text-slate-500">Try a different date range or clear the filters.</p>
+    </div>;
   }
 
   return (
@@ -42,11 +45,11 @@ export function AttendanceReportTable({ rows }: { rows: AttendanceReportRow[] })
             <TableCell>
               <AttendanceStatusBadge status={row.status} />
             </TableCell>
-            <TableCell>{formatMinutesOrNull(row.scheduledMinutes, "—")}</TableCell>
-            <TableCell>{formatMinutesOrNull(row.workedMinutes, "—")}</TableCell>
-            <TableCell>{formatMinutesOrNull(row.lateMinutes, "—")}</TableCell>
-            <TableCell>{formatMinutesOrNull(row.earlyDepartureMinutes, "—")}</TableCell>
-            <TableCell>{formatMinutesOrNull(row.overtimeMinutes, "—")}</TableCell>
+            <TableCell className="tabular-nums">{formatMinutesOrNull(row.scheduledMinutes, "—")}</TableCell>
+            <TableCell className="tabular-nums">{formatMinutesOrNull(row.workedMinutes, "—")}</TableCell>
+            <TableCell className="tabular-nums">{formatMinutesOrNull(row.lateMinutes, "—")}</TableCell>
+            <TableCell className="tabular-nums">{formatMinutesOrNull(row.earlyDepartureMinutes, "—")}</TableCell>
+            <TableCell className="tabular-nums">{formatMinutesOrNull(row.overtimeMinutes, "—")}</TableCell>
           </TableRow>
         ))}
       </TableBody>

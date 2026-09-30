@@ -5,6 +5,7 @@ import { isAttendancePeriodClosed } from "@/domains/attendance/periods/attendanc
 import { resolveEmployeeTimezone } from "@/domains/workforce/service";
 import { Card, CardContent } from "@/components/ui/card";
 import { AttendanceWorkspace } from "@/components/attendance/attendance-workspace";
+import { PageHeader } from "@/components/ui/page-header";
 
 export default async function MyAttendancePage() {
   const ctx = await getRequestContext();
@@ -12,10 +13,11 @@ export default async function MyAttendancePage() {
   if (!ctx.employeeId) {
     return (
       <div className="space-y-6">
-        <h1 className="text-lg font-semibold text-slate-900">My Attendance</h1>
+        <PageHeader title="My Attendance" />
         <Card>
-          <CardContent className="py-10 text-center text-sm text-slate-400">
-            No employee record is linked to your account yet. Ask HR to link your login to your employee profile.
+          <CardContent className="py-12 text-center">
+            <p className="text-sm font-medium text-slate-700">No employee record is linked to your account yet.</p>
+            <p className="mt-1 text-xs text-slate-500">Ask HR to link your login to your employee profile.</p>
           </CardContent>
         </Card>
       </div>
@@ -32,10 +34,7 @@ export default async function MyAttendancePage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-lg font-semibold text-slate-900">My Attendance</h1>
-        <p className="text-sm text-slate-500">Check in, check out, and review your attendance history.</p>
-      </div>
+      <PageHeader title="My Attendance" description="Check in, check out, and review your attendance history." />
 
       <AttendanceWorkspace
         employeeId={ctx.employeeId}
