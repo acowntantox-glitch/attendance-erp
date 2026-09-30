@@ -19,6 +19,9 @@ const envSchema = z.object({
   // Batch 13 — scheduled attendance processing. The job endpoint is disabled (rejects every
   // request) until INTERNAL_JOB_SECRET is set.
   INTERNAL_JOB_SECRET: z.string().min(32, "INTERNAL_JOB_SECRET must be at least 32 characters").optional(),
+  // Vercel Cron automatically sends `Authorization: Bearer <CRON_SECRET>` when this project
+  // variable is set (Vercel recommends >= 16 characters). Accepted alongside INTERNAL_JOB_SECRET.
+  CRON_SECRET: z.string().min(16, "CRON_SECRET must be at least 16 characters").optional(),
   // A work date becomes eligible this long after it has ended in the latest-ending timezone/shift.
   ATTENDANCE_PROCESSING_LAG_MINUTES: z.coerce.number().int().min(0).max(1440).default(180),
   // How many of the most recent eligible work dates each run examines (catches missed invocations).

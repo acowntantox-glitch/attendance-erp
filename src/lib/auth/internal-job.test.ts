@@ -25,4 +25,17 @@ describe("isInternalJobAuthorized", () => {
     expect(isInternalJobAuthorized(`Bearer ${SECRET}extra`, SECRET)).toBe(false);
     expect(isInternalJobAuthorized("Bearer x", SECRET)).toBe(false);
   });
+
+  it("accepts any one of several configured secrets (INTERNAL_JOB_SECRET or Vercel's CRON_SECRET)", () => {
+    const cron = "c".repeat(20);
+    expect(isInternalJobAuthorized(`Bearer ${cron}`, SECRET, cron)).toBe(true);
+    expect(isInternalJobAuthorized(`Bearer ${SECRET}`, SECRET, cron)).toBe(true);
+    expect(isInternalJobAuthorized("Bearer other", SECRET, cron)).toBe(false);
+  });
+
+  it("ignores unset secrets in the list, and authorizes nothing when none is configured", () => {
+    expect(isInternalJobAuthorized(`Bearer ${SECRET}`, undefined, SECRET)).toBe(true);
+    expect(isInternalJobAuthorized(`Bearer ${SECRET}`, undefined, undefined)).toBe(false);
+    expect(isInternalJobAuthorized(`Bearer ${SECRET}`)).toBe(false);
+  });
 });

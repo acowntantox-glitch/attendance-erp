@@ -21,6 +21,7 @@ import {
   setCompanyDefaultWeeklyOff,
 } from "../src/domains/workforce/service";
 import type { RequestContext } from "../src/lib/auth/request-context";
+import { assertSafeDatabaseTarget } from "../src/lib/db-safety";
 
 const DEV_PASSWORD = "DevPassword123!";
 
@@ -31,6 +32,18 @@ function daysFromNowIso(days: number): string {
 }
 
 async function main() {
+  // Must stay the FIRST statement: it runs before any INSERT/UPDATE. Refuses production NODE_ENV and
+  // any non-local database (host-based, not NODE_ENV-based). Prints the host only, never the URL.
+  const { host } = assertSafeDatabaseTarget({
+    purpose: "database seed",
+    databaseUrl: process.env.DATABASE_URL,
+    nodeEnv: process.env.NODE_ENV,
+    refuseProductionNodeEnv: true,
+    allowedRemoteHost: process.env.SEED_ALLOW_REMOTE_HOST,
+    overrideVariable: "SEED_ALLOW_REMOTE_HOST",
+  });
+  console.log(`Seed target host: ${host}`);
+
   console.log("Seeding development data...");
   console.log(`All seed users share the password: ${DEV_PASSWORD} (development only — never use in production)`);
 

@@ -39,7 +39,9 @@ import {
 const MAX_MESSAGE_LENGTH = 1000;
 const MAX_LOGGED_FAILURES = 5;
 
-export type WorkDateOutcome = "PROCESSED" | "UP_TO_DATE" | "SKIPPED_PERIOD_CLOSED" | "SKIPPED_LOCKED" | "FAILED";
+/** `INCOMPLETE`: the execution time budget ran out part-way through this date. The employees not yet
+ *  reached have no record and will be picked up by the next invocation. */
+export type WorkDateOutcome = "PROCESSED" | "INCOMPLETE" | "UP_TO_DATE" | "SKIPPED_PERIOD_CLOSED" | "SKIPPED_LOCKED" | "FAILED";
 
 export type WorkDateResult = {
   workDate: string;
@@ -47,6 +49,8 @@ export type WorkDateResult = {
   created: number;
   skipped: number;
   failed: number;
+  /** Employees deliberately left unprocessed because the time budget ran out (0 otherwise). */
+  remaining: number;
   runId: string | null;
 };
 
@@ -58,6 +62,8 @@ export type ScheduledProcessingSummary = {
   created: number;
   skipped: number;
   failed: number;
+  /** True when the time budget ran out: some work was intentionally left for the next invocation. */
+  stoppedEarly: boolean;
   companies: CompanyProcessingResult[];
 };
 
@@ -70,12 +76,28 @@ export type ScheduledProcessingOptions = {
   /** Server-side restriction of which companies to cover. NEVER wire this to request input — the
    *  public job endpoint always processes every active company. Used by tests and operators. */
   companyIds?: string[];
+  /** Milliseconds the job may keep STARTING new work (see the route's `maxDuration`). Checked between
+   *  employees, dates and companies, never mid-employee. Undefined means unlimited (tests, scripts). */
+  timeBudgetMs?: number;
 };
 
 /** Test seam: the per-employee write. Production always uses `materializeMissingDailyRecord`. */
 export type ProcessingDeps = {
   materialize: (companyId: string, employeeId: string, workDate: string) => Promise<MaterializeMissingResult>;
+  /** Milliseconds clock; defaults to `Date.now`. A seam so the time budget is testable. */
+  clock?: () => number;
 };
+
+/** A deadline the job checks between units of work. */
+export type TimeBudget = { expired: () => boolean };
+
+const UNLIMITED_BUDGET: TimeBudget = { expired: () => false };
+
+function startBudget(timeBudgetMs: number | undefined, clock: () => number): TimeBudget {
+  if (timeBudgetMs === undefined) return UNLIMITED_BUDGET;
+  const deadline = clock() + timeBudgetMs;
+  return { expired: () => clock() >= deadline };
+}
 
 const defaultDeps: ProcessingDeps = { materialize: materializeMissingDailyRecord };
 
@@ -93,13 +115,18 @@ export async function processCompanyWorkDate(
   workDate: string,
   trigger: ProcessingTrigger,
   deps: ProcessingDeps = defaultDeps,
+  budget: TimeBudget = UNLIMITED_BUDGET,
 ): Promise<WorkDateResult> {
-  const result = (outcome: WorkDateOutcome, counts?: Partial<Pick<WorkDateResult, "created" | "skipped" | "failed" | "runId">>): WorkDateResult => ({
+  const result = (
+    outcome: WorkDateOutcome,
+    counts?: Partial<Pick<WorkDateResult, "created" | "skipped" | "failed" | "remaining" | "runId">>,
+  ): WorkDateResult => ({
     workDate,
     outcome,
     created: counts?.created ?? 0,
     skipped: counts?.skipped ?? 0,
     failed: counts?.failed ?? 0,
+    remaining: counts?.remaining ?? 0,
     runId: counts?.runId ?? null,
   });
 
@@ -126,10 +153,17 @@ export async function processCompanyWorkDate(
     let created = 0;
     let skipped = eligible.length - missing.length;
     let failed = 0;
+    let remaining = 0;
     const failureMessages: string[] = [];
 
     try {
-      for (const employee of missing) {
+      for (const [index, employee] of missing.entries()) {
+        // Stop BEFORE starting an employee once the budget is spent: the platform never has to kill
+        // the function mid-employee, and nothing unfinished is reported as done.
+        if (budget.expired()) {
+          remaining = missing.length - index;
+          break;
+        }
         try {
           const outcome = await deps.materialize(companyId, employee.id, workDate);
           if (outcome === "CREATED") created += 1;
@@ -146,6 +180,23 @@ export async function processCompanyWorkDate(
             failureMessages.push(`${employee.id}: ${error instanceof Error ? error.message : "unknown error"}`);
           }
         }
+      }
+
+      if (remaining > 0) {
+        // Intentionally stopped early: this run is NOT reported as successful. There is no separate
+        // "partial" status; FAILED plus this message is the truthful, existing representation, and
+        // the next invocation (materialize-missing-only) resumes exactly where this one stopped.
+        const finished = await attendanceProcessingRepository.finish(run.id, companyId, {
+          status: "FAILED",
+          createdCount: created,
+          skippedCount: skipped,
+          failedCount: failed,
+          message: truncate(
+            [`Stopped early: time budget reached with ${remaining} employee(s) not yet processed; the next invocation resumes.`, ...failureMessages].join(" "),
+          ),
+        });
+        await auditRun(companyId, trigger, finished);
+        return result("INCOMPLETE", { created, skipped, failed, remaining, runId: run.id });
       }
 
       const finished = await attendanceProcessingRepository.finish(run.id, companyId, {
@@ -207,23 +258,44 @@ export async function runScheduledAttendanceProcessing(
   const lagMinutes = options.lagMinutes ?? env.ATTENDANCE_PROCESSING_LAG_MINUTES;
   const lookbackDays = options.lookbackDays ?? env.ATTENDANCE_PROCESSING_LOOKBACK_DAYS;
   const trigger = options.trigger ?? "SCHEDULED";
+  const budget = startBudget(options.timeBudgetMs, deps.clock ?? Date.now);
 
   const allCompanies = await attendanceProcessingRepository.listActiveCompanies();
   const companies = options.companyIds ? allCompanies.filter((company) => options.companyIds!.includes(company.id)) : allCompanies;
 
-  const summary: ScheduledProcessingSummary = { companiesProcessed: 0, companiesFailed: 0, created: 0, skipped: 0, failed: 0, companies: [] };
+  const summary: ScheduledProcessingSummary = {
+    companiesProcessed: 0,
+    companiesFailed: 0,
+    created: 0,
+    skipped: 0,
+    failed: 0,
+    stoppedEarly: false,
+    companies: [],
+  };
 
   for (const company of companies) {
+    if (budget.expired()) {
+      summary.stoppedEarly = true;
+      break;
+    }
     const companyResult: CompanyProcessingResult = { companyId: company.id, dates: [], error: null };
     try {
       const inputs = await attendanceProcessingRepository.getCompanyProcessingInputs(company.id, company.timezone);
       const dueDates = computeDueWorkDates({ now, timezones: inputs.timezones, windows: inputs.windows, lagMinutes, lookbackDays });
       for (const workDate of dueDates) {
-        const dateResult = await processCompanyWorkDate(company.id, workDate, trigger, deps);
+        if (budget.expired()) {
+          summary.stoppedEarly = true;
+          break;
+        }
+        const dateResult = await processCompanyWorkDate(company.id, workDate, trigger, deps, budget);
         companyResult.dates.push(dateResult);
         summary.created += dateResult.created;
         summary.skipped += dateResult.skipped;
         summary.failed += dateResult.failed;
+        if (dateResult.outcome === "INCOMPLETE") {
+          summary.stoppedEarly = true;
+          break;
+        }
       }
       summary.companiesProcessed += 1;
     } catch (error) {
