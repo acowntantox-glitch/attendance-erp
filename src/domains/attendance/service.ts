@@ -7,7 +7,7 @@ import { AuthorizationError, isUniqueViolation } from "@/lib/errors";
 import { recordAuditLog } from "@/domains/audit/service";
 import { employeeRepository } from "@/domains/employee/repository";
 import { EmployeeNotFoundError } from "@/domains/employee/errors";
-import { getWorkforceDayInfo, resolveEmployeeTimezone } from "@/domains/workforce/service";
+import { getWorkforceDayInfo, resolveEmployeeTimezone, resolveWorkforceDayInfo } from "@/domains/workforce/service";
 import { addDays, utcToZonedWallTime, zonedWallTimeToUtc } from "@/lib/datetime";
 import { applyCorrectionsToSessions, calculateDailyAttendance, closedBreakMinutes, diffMinutes } from "./calculation";
 import { assertAttendancePeriodOpen, isAttendancePeriodClosed } from "./periods/attendance-period.service";
@@ -37,6 +37,7 @@ import {
 } from "./errors";
 import type {
   AttendanceCorrection,
+  DailyCalculationResult,
   AttendancePolicy,
   AttendanceCorrectionField,
   AttendanceCorrectionOverride,
@@ -523,7 +524,7 @@ async function resolveCorrectionEventTarget(
  * session created for another correction is caught rather than being applied to the wrong target.
  */
 async function buildCorrectionOverride(
-  ctx: RequestContext,
+  companyId: string,
   correction: AttendanceCorrection,
   executor: DbExecutor,
   policy: AttendancePolicy,
@@ -543,7 +544,7 @@ async function buildCorrectionOverride(
     // No real check-in ever existed for this correction, so there is no frozen session snapshot
     // to reuse — resolve a fresh Workforce expectation for the synthetic session, same as a real
     // check-in would capture at the moment it occurred.
-    const dayInfo = await getWorkforceDayInfo(ctx, correction.employeeId, correction.workDate);
+    const dayInfo = await resolveWorkforceDayInfo(companyId, correction.employeeId, correction.workDate);
     const window = dayInfo.expectedWindow;
     return {
       correctionId: correction.id,
@@ -572,28 +573,31 @@ async function buildCorrectionOverride(
   };
 }
 
-async function recalculateDailyRecordInternal(
-  ctx: RequestContext,
-  employeeId: string,
-  workDate: string,
-  executor: DbExecutor = db,
-): Promise<AttendanceDailyRecord> {
+/**
+ * The read half of the daily calculation: gathers sessions, approved corrections, the Workforce
+ * day context and the company policy, and runs the ONE calculation engine. Persists nothing —
+ * `recalculateDailyRecordInternal` upserts its result (recalculation) and
+ * `materializeMissingDailyRecord` inserts it only if no record exists (scheduled processing).
+ * Scoped by `companyId` rather than a `RequestContext` so the scheduled job needs no user identity.
+ * It performs no permission check, so every caller must already have authorized the action.
+ */
+async function computeDailyResult(companyId: string, employeeId: string, workDate: string, executor: DbExecutor): Promise<DailyCalculationResult> {
   const sessions = await buildSessionInputs(employeeId, workDate, executor);
 
   // Batch 12 — the company policy is loaded exactly once here (the one path shared by check-out,
-  // manual recalculation, correction approval and day processing) and passed down, never re-read
-  // per correction or per caller. It applies to this calculation only; see attendance-policy.service.ts.
-  const policy = await resolveAttendancePolicy(ctx.companyId, executor);
+  // manual recalculation, correction approval, day processing and scheduled materialization) and
+  // passed down, never re-read per correction or per caller. It applies to this calculation only;
+  // see attendance-policy.service.ts.
+  const policy = await resolveAttendancePolicy(companyId, executor);
 
   // Only APPROVED corrections may affect calculation — PENDING/REJECTED never reach this list
   // (see attendanceCorrectionRepository.listApprovedForWorkDate). This is the one authoritative
-  // calculation path: both manual recalculation and approval-triggered recalculation go through
-  // exactly this function, so they can never disagree.
+  // calculation path, so every caller can never disagree.
   const approvedCorrections = await attendanceCorrectionRepository.listApprovedForWorkDate(employeeId, workDate, executor);
-  const overrides = await Promise.all(approvedCorrections.map((correction) => buildCorrectionOverride(ctx, correction, executor, policy)));
+  const overrides = await Promise.all(approvedCorrections.map((correction) => buildCorrectionOverride(companyId, correction, executor, policy)));
   const correctedSessions = applyCorrectionsToSessions(sessions, overrides);
 
-  const dayInfo = await getWorkforceDayInfo(ctx, employeeId, workDate);
+  const dayInfo = await resolveWorkforceDayInfo(companyId, employeeId, workDate);
   const window = dayInfo.expectedWindow;
 
   const dayContext: DailyWorkforceContext = {
@@ -605,7 +609,16 @@ async function recalculateDailyRecordInternal(
     gracePeriodMinutes: dayInfo.scheduleAssignment?.shift?.gracePeriodMinutes ?? policy.defaultGracePeriodMinutes,
   };
 
-  const result = calculateDailyAttendance(correctedSessions, dayContext, policy);
+  return calculateDailyAttendance(correctedSessions, dayContext, policy);
+}
+
+async function recalculateDailyRecordInternal(
+  ctx: RequestContext,
+  employeeId: string,
+  workDate: string,
+  executor: DbExecutor = db,
+): Promise<AttendanceDailyRecord> {
+  const result = await computeDailyResult(ctx.companyId, employeeId, workDate, executor);
 
   return attendanceDailyRecordRepository.upsert(executor, {
     companyId: ctx.companyId,
@@ -621,6 +634,48 @@ async function recalculateDailyRecordInternal(
     firstCheckInAt: result.firstCheckInAt,
     lastCheckOutAt: result.lastCheckOutAt,
     sessionCount: result.sessionCount,
+  });
+}
+
+export type MaterializeMissingResult = "CREATED" | "SKIPPED_EXISTING";
+
+/**
+ * Batch 13 — creates the daily record for (employee, work date) ONLY IF none exists; an existing
+ * record is never calculated against, recalculated or modified. Uses the same `computeDailyResult`
+ * engine path as every other recalculation, inside one transaction that first takes the period-open
+ * SHARE lock (so a closed period is refused with `AttendancePeriodLockedError` and a concurrent
+ * close cannot interleave). The insert is `ON CONFLICT DO NOTHING` on the (employee, work date)
+ * unique index, so a record written concurrently — e.g. by a check-out — wins and this call
+ * reports `SKIPPED_EXISTING`. If this insert lands first, a later check-out's upsert still
+ * overwrites it with the correct figures, so the final state is always right.
+ *
+ * Internal entry point for the scheduled job: there is no end user, hence no permission check. The
+ * job derives `companyId` server-side and only passes employees from that company's own eligible
+ * list; `computeDailyResult` additionally rejects an employee outside `companyId`.
+ */
+export async function materializeMissingDailyRecord(companyId: string, employeeId: string, workDate: string): Promise<MaterializeMissingResult> {
+  return db.transaction(async (tx) => {
+    await assertAttendancePeriodOpen(companyId, workDate, tx);
+
+    if (await attendanceDailyRecordRepository.findOne(employeeId, workDate, tx)) return "SKIPPED_EXISTING";
+
+    const result = await computeDailyResult(companyId, employeeId, workDate, tx);
+    const inserted = await attendanceDailyRecordRepository.insertIfAbsent(tx, {
+      companyId,
+      employeeId,
+      workDate,
+      status: result.status,
+      scheduledMinutes: result.scheduledMinutes,
+      workedMinutes: result.workedMinutes,
+      breakMinutes: result.breakMinutes,
+      overtimeMinutes: result.overtimeMinutes,
+      lateMinutes: result.lateMinutes,
+      earlyDepartureMinutes: result.earlyDepartureMinutes,
+      firstCheckInAt: result.firstCheckInAt,
+      lastCheckOutAt: result.lastCheckOutAt,
+      sessionCount: result.sessionCount,
+    });
+    return inserted ? "CREATED" : "SKIPPED_EXISTING";
   });
 }
 

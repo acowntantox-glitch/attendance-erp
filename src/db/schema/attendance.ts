@@ -28,6 +28,14 @@ export const attendanceDailyStatusEnum = pgEnum("attendance_daily_status", [
   "UNDER_HOURS",
 ]);
 
+/** Batch 13 — who started a processing run. SCHEDULED is the only value written today; MANUAL is
+ *  reserved for an operator-initiated run of the same materialize-missing job. */
+export const attendanceProcessingTriggerEnum = pgEnum("attendance_processing_trigger", ["SCHEDULED", "MANUAL"]);
+
+/** RUNNING while in flight, COMPLETED when the run finished (per-employee failures are counted in
+ *  `failed_count`, they do not fail the run), FAILED when the run itself aborted. */
+export const attendanceProcessingRunStatusEnum = pgEnum("attendance_processing_run_status", ["RUNNING", "COMPLETED", "FAILED"]);
+
 export const attendanceCorrectionStatusEnum = pgEnum("attendance_correction_status", ["PENDING", "APPROVED", "REJECTED"]);
 
 /** Deliberately just OPEN/CLOSED (Batch 8) — no FINALIZED/APPROVED/LOCKED/REOPENED. A "reopened"
@@ -336,5 +344,42 @@ export const attendancePolicies = pgTable(
     check("attendance_policies_early_grace_nonneg", sql`${table.earlyDepartureGraceMinutes} >= 0`),
     check("attendance_policies_overtime_threshold_nonneg", sql`${table.overtimeThresholdMinutes} >= 0`),
     check("attendance_policies_minimum_worked_nonneg", sql`${table.minimumWorkedMinutes} is null or ${table.minimumWorkedMinutes} >= 0`),
+  ],
+);
+
+/**
+ * Batch 13 — one row per automated "materialize missing daily records" run for a (company, work
+ * date). The detailed operational record of the scheduled job; the audit log only gets a summary.
+ * A run row is written only when there was something to process, so an hourly scheduler does not
+ * fill this table with no-op rows.
+ *
+ * The partial unique index allows at most one RUNNING row per (company, work date) at the database
+ * level. It backs — but does not replace — the PostgreSQL advisory lock that actually serializes
+ * runs (see attendance-processing.repository.ts): a RUNNING row left behind by a crashed process is
+ * marked FAILED by the next run once it holds the advisory lock.
+ */
+export const attendanceProcessingRuns = pgTable(
+  "attendance_processing_runs",
+  {
+    id: id(),
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => companies.id, { onDelete: "cascade" }),
+    workDate: date("work_date").notNull(),
+    trigger: attendanceProcessingTriggerEnum().notNull(),
+    status: attendanceProcessingRunStatusEnum().notNull().default("RUNNING"),
+    createdCount: integer("created_count").notNull().default(0),
+    skippedCount: integer("skipped_count").notNull().default(0),
+    failedCount: integer("failed_count").notNull().default(0),
+    message: text(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("attendance_processing_runs_running_unique")
+      .on(table.companyId, table.workDate)
+      .where(sql`${table.status} = 'RUNNING'`),
+    index("attendance_processing_runs_company_started_idx").on(table.companyId, table.startedAt),
   ],
 );

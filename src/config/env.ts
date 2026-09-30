@@ -15,6 +15,14 @@ const envSchema = z.object({
   S3_ACCESS_KEY_ID: z.string().min(1).optional(),
   S3_SECRET_ACCESS_KEY: z.string().min(1).optional(),
   S3_FORCE_PATH_STYLE: z.coerce.boolean().default(false),
+
+  // Batch 13 — scheduled attendance processing. The job endpoint is disabled (rejects every
+  // request) until INTERNAL_JOB_SECRET is set.
+  INTERNAL_JOB_SECRET: z.string().min(32, "INTERNAL_JOB_SECRET must be at least 32 characters").optional(),
+  // A work date becomes eligible this long after it has ended in the latest-ending timezone/shift.
+  ATTENDANCE_PROCESSING_LAG_MINUTES: z.coerce.number().int().min(0).max(1440).default(180),
+  // How many of the most recent eligible work dates each run examines (catches missed invocations).
+  ATTENDANCE_PROCESSING_LOOKBACK_DAYS: z.coerce.number().int().min(1).max(31).default(7),
 });
 
 export type Env = z.infer<typeof envSchema>;

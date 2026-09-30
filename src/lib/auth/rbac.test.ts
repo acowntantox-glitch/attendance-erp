@@ -103,3 +103,14 @@ describe("rbac", () => {
     });
   });
 });
+
+describe("attendance.process.view (Batch 13)", () => {
+  it("is held by HR_ADMIN, HR_MANAGER and the company-level admins, and by no other role", () => {
+    expect(can("SUPER_ADMIN", "attendance.process.view")).toBe(true);
+    expect(can("COMPANY_ADMIN", "attendance.process.view")).toBe(true);
+    expect(can("HR_ADMIN", "attendance.process.view")).toBe(true);
+    expect(can("HR_MANAGER", "attendance.process.view")).toBe(true);
+    expect(can("MANAGER", "attendance.process.view")).toBe(false);
+    expect(can("EMPLOYEE", "attendance.process.view")).toBe(false);
+  });
+});

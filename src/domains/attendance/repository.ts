@@ -212,6 +212,22 @@ export const attendanceEventRepository = {
   },
 };
 
+export type DailyRecordWriteInput = {
+  companyId: string;
+  employeeId: string;
+  workDate: string;
+  status: (typeof attendanceDailyRecords.$inferInsert)["status"];
+  scheduledMinutes: number;
+  workedMinutes: number | null;
+  breakMinutes: number;
+  overtimeMinutes: number | null;
+  lateMinutes: number | null;
+  earlyDepartureMinutes: number | null;
+  firstCheckInAt: Date | null;
+  lastCheckOutAt: Date | null;
+  sessionCount: number;
+};
+
 export const attendanceDailyRecordRepository = {
   findOne(employeeId: string, workDate: string, executor: DbExecutor = db) {
     return executor.query.attendanceDailyRecords.findFirst({
@@ -224,24 +240,7 @@ export const attendanceDailyRecordRepository = {
       orderBy: asc(attendanceDailyRecords.workDate),
     });
   },
-  async upsert(
-    executor: DbExecutor,
-    input: {
-      companyId: string;
-      employeeId: string;
-      workDate: string;
-      status: (typeof attendanceDailyRecords.$inferInsert)["status"];
-      scheduledMinutes: number;
-      workedMinutes: number | null;
-      breakMinutes: number;
-      overtimeMinutes: number | null;
-      lateMinutes: number | null;
-      earlyDepartureMinutes: number | null;
-      firstCheckInAt: Date | null;
-      lastCheckOutAt: Date | null;
-      sessionCount: number;
-    },
-  ) {
+  async upsert(executor: DbExecutor, input: DailyRecordWriteInput) {
     const rows = await executor
       .insert(attendanceDailyRecords)
       .values({ ...input, calculatedAt: new Date() })
@@ -263,6 +262,17 @@ export const attendanceDailyRecordRepository = {
       })
       .returning();
     return rows[0]!;
+  },
+  /** Batch 13 — insert-only counterpart of `upsert`: an existing (employee, work date) record is
+   *  never touched (`ON CONFLICT DO NOTHING`). Returns the new row, or `null` when a record already
+   *  existed. */
+  async insertIfAbsent(executor: DbExecutor, input: DailyRecordWriteInput) {
+    const rows = await executor
+      .insert(attendanceDailyRecords)
+      .values({ ...input, calculatedAt: new Date() })
+      .onConflictDoNothing({ target: [attendanceDailyRecords.employeeId, attendanceDailyRecords.workDate] })
+      .returning();
+    return rows[0] ?? null;
   },
 };
 

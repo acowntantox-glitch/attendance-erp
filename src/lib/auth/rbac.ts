@@ -52,6 +52,7 @@ export const PERMISSIONS = [
   "attendance.exception.manage",
   "attendance.policy.view",
   "attendance.policy.update",
+  "attendance.process.view",
   "schedule.view",
   "schedule.create",
   "schedule.update",
@@ -165,6 +166,7 @@ const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "attendance.exception.manage",
     "attendance.policy.view",
     "attendance.policy.update",
+    "attendance.process.view",
     ...WORKFORCE_TEMPLATE_FULL,
     ...WORKFORCE_ASSIGNMENT_FULL,
     ...WORKFORCE_HOLIDAY_FULL,
@@ -202,6 +204,7 @@ const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     // View-only: changing company-wide calculation rules is an HR_ADMIN-and-above action, the same
     // split as schedules/shifts (no archive) vs. period unlock.
     "attendance.policy.view",
+    "attendance.process.view",
     ...WORKFORCE_TEMPLATE_MANAGE_NO_ARCHIVE,
     ...WORKFORCE_ASSIGNMENT_FULL,
     ...WORKFORCE_HOLIDAY_MANAGE_NO_ARCHIVE,

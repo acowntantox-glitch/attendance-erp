@@ -529,20 +529,36 @@ export async function getWorkforceDayInfo(ctx: RequestContext, employeeId: strin
   }
   const targetEmployeeId = ctx.role === "EMPLOYEE" ? ctx.employeeId! : employeeId;
 
-  const employee = await loadEmployeeInCompany(ctx, targetEmployeeId);
+  return resolveWorkforceDayInfo(ctx.companyId, targetEmployeeId, date);
+}
+
+/**
+ * The permission-free core of `getWorkforceDayInfo`, scoped by `companyId` instead of a
+ * `RequestContext`. It exists so Attendance's own calculation path (`computeDailyResult`) and the
+ * scheduled processing job — which have no end-user request — reuse the one holiday -> weekly-off
+ * -> schedule-assignment implementation instead of duplicating it. It still enforces tenant
+ * isolation (an employee outside `companyId` is rejected exactly like the wrapper), but it performs
+ * NO permission check: every caller must already have authorized the action it is performing.
+ * Never expose it directly to a request handler.
+ */
+export async function resolveWorkforceDayInfo(companyId: string, employeeId: string, date: string): Promise<WorkforceDayInfo> {
+  const targetEmployeeId = employeeId;
+  const employee = await employeeRepository.findById(targetEmployeeId);
+  if (!employee) throw new EmployeeNotFoundError();
+  if (employee.companyId !== companyId) throw new AuthorizationError("This resource does not belong to your company.");
   const [company, branch] = await Promise.all([
-    companyRepository.findById(ctx.companyId),
+    companyRepository.findById(companyId),
     employee.locationId ? branchRepository.findById(employee.locationId) : Promise.resolve(null),
   ]);
   if (!company) throw new Error("Company not found for an authenticated request context.");
 
   // Step 1: holiday short-circuits everything else.
-  const holiday = await holidayRepository.findActiveForDate(ctx.companyId, employee.locationId, date);
+  const holiday = await holidayRepository.findActiveForDate(companyId, employee.locationId, date);
   if (holiday) {
     return {
       date,
       employeeId: targetEmployeeId,
-      companyId: ctx.companyId,
+      companyId: companyId,
       timezone: resolveTimezone(branch?.timezone, company.timezone),
       isHoliday: true,
       holiday,
@@ -565,7 +581,7 @@ export async function getWorkforceDayInfo(ctx: RequestContext, employeeId: strin
     isWeeklyOff = override.offDays.includes(dow);
     weeklyOffSource = "employee_override";
   } else {
-    const companyDefault = await weeklyOffRuleRepository.findCompanyDefault(ctx.companyId);
+    const companyDefault = await weeklyOffRuleRepository.findCompanyDefault(companyId);
     if (companyDefault) {
       isWeeklyOff = companyDefault.offDays.includes(dow);
       weeklyOffSource = "company_default";
@@ -576,7 +592,7 @@ export async function getWorkforceDayInfo(ctx: RequestContext, employeeId: strin
     return {
       date,
       employeeId: targetEmployeeId,
-      companyId: ctx.companyId,
+      companyId: companyId,
       timezone,
       isHoliday: false,
       holiday: null,
@@ -594,7 +610,7 @@ export async function getWorkforceDayInfo(ctx: RequestContext, employeeId: strin
     return {
       date,
       employeeId: targetEmployeeId,
-      companyId: ctx.companyId,
+      companyId: companyId,
       timezone,
       isHoliday: false,
       holiday: null,
@@ -613,7 +629,7 @@ export async function getWorkforceDayInfo(ctx: RequestContext, employeeId: strin
   return {
     date,
     employeeId: targetEmployeeId,
-    companyId: ctx.companyId,
+    companyId: companyId,
     timezone: resolvedTimezone,
     isHoliday: false,
     holiday: null,

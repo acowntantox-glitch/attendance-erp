@@ -3,7 +3,8 @@ import { getRequestContext } from "@/lib/auth/request-context";
 import { can } from "@/lib/auth/rbac";
 import { getAttendanceDashboard } from "@/domains/attendance/service";
 import { isAttendancePeriodClosed } from "@/domains/attendance/periods/attendance-period.service";
-import { listBranches, listDepartments } from "@/domains/organization/service";
+import { getMyCompany, listBranches, listDepartments } from "@/domains/organization/service";
+import { listAttendanceProcessingRuns } from "@/domains/attendance/processing/attendance-auto-processing.service";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Pagination } from "@/components/ui/pagination";
 import { DateSelector } from "@/components/attendance/dashboard/date-selector";
@@ -14,6 +15,7 @@ import { LateArrivalsTable } from "@/components/attendance/dashboard/late-arriva
 import { IncompleteAttendanceTable } from "@/components/attendance/dashboard/incomplete-attendance-table";
 import { DashboardFilterBar } from "@/components/attendance/dashboard/dashboard-filter-bar";
 import { AttendanceDashboardTable } from "@/components/attendance/dashboard/attendance-dashboard-table";
+import { RecentProcessingRuns } from "@/components/attendance/dashboard/recent-processing-runs";
 import type { AttendanceDailyStatus } from "@/domains/attendance/model";
 
 type SearchParams = {
@@ -74,6 +76,11 @@ export default async function AttendanceDashboardPage({ searchParams }: { search
     isAttendancePeriodClosed(ctx.companyId, date.slice(0, 7)),
   ]);
 
+  // Batch 13 — read-only run history; skipped entirely for roles without attendance.process.view.
+  const [processingRuns, company] = can(ctx.role, "attendance.process.view")
+    ? await Promise.all([listAttendanceProcessingRuns(ctx, { page: 1, pageSize: 10 }), getMyCompany(ctx)])
+    : [null, null];
+
   const filterParams = { search: params.search, departmentId: params.departmentId, locationId: params.locationId, status: params.status };
 
   return (
@@ -83,6 +90,8 @@ export default async function AttendanceDashboardPage({ searchParams }: { search
       <SummaryCards summary={result.summary} />
 
       {can(ctx.role, "attendance.recalculate") && <ProcessDayButton workDate={date} periodClosed={periodClosed} />}
+
+      {processingRuns && company && <RecentProcessingRuns runs={processingRuns.items} timezone={company.timezone} />}
 
       {date === today && (
         <Card>

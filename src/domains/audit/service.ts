@@ -29,7 +29,12 @@ export type RecordAuditLogInput = {
  * written via `@/lib/logger`. Never throws — an audit-log failure must not block the business
  * operation it's describing, but it is logged loudly so it can be investigated.
  */
-export async function recordAuditLog(ctx: RequestContext | null, input: RecordAuditLogInput): Promise<void> {
+/** The subset of a `RequestContext` the audit trail needs. A system actor (scheduled job) has a
+ *  company but no user: pass `userId: null` and mark `metadata.actor: "system"`. */
+export type SystemAuditContext = { companyId: string; requestId?: string; userId?: null };
+export type AuditContext = RequestContext | SystemAuditContext;
+
+export async function recordAuditLog(ctx: AuditContext | null, input: RecordAuditLogInput): Promise<void> {
   try {
     await auditLogRepository.insert({
       companyId: ctx?.companyId ?? null,
