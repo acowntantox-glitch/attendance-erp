@@ -47,7 +47,7 @@ export default async function AttendanceDashboardPage({ searchParams }: { search
   if (!can(ctx.role, "attendance.view")) {
     return (
       <div className="space-y-6">
-        <h1 className="text-lg font-semibold text-slate-900">Attendance Dashboard</h1>
+        <h1 className="text-lg font-semibold text-slate-900">Attendance Overview</h1>
         <Card>
           <CardContent className="py-10 text-center text-sm text-slate-400">
             You don&apos;t have permission to view the attendance dashboard.

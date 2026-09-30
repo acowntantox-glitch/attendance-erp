@@ -84,7 +84,7 @@ export function AttendanceCalendarMatrix({ result, today }: { result: Attendance
     <div className="space-y-2">
       {noRecordsAtAll && (
         <p className="px-1 text-sm text-slate-500">
-          No attendance has been processed for this period yet. Run Process Day from the Attendance Dashboard.
+          No attendance has been processed for this period yet. Run Process Day from the Attendance Overview.
         </p>
       )}
       <Table>

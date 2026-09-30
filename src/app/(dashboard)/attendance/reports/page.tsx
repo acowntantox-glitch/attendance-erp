@@ -146,7 +146,7 @@ export default async function AttendanceReportsPage({ searchParams }: { searchPa
 
       {showUncomputedNote && (
         <p className="text-xs text-slate-400">
-          Some employees have no processed attendance record for this date yet. Run Process Day from the Attendance Dashboard.
+          Some employees have no processed attendance record for this date yet. Run Process Day from the Attendance Overview.
         </p>
       )}
 

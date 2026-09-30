@@ -7,7 +7,7 @@ export default function AttendanceDashboardError({ reset }: { error: Error & { d
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-lg font-semibold text-slate-900">Attendance Dashboard</h1>
+        <h1 className="text-lg font-semibold text-slate-900">Attendance Overview</h1>
       </div>
       <Card>
         <CardContent className="flex flex-col items-center gap-4 py-10 text-center">
