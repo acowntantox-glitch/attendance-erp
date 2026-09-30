@@ -27,7 +27,7 @@ type RouteParams = { params: Promise<{ id: string }>; searchParams: Promise<{ da
  * silently return the caller's own data regardless of `id` for that role, but funneling to the
  * dedicated route avoids any confusing "your own data at someone else's URL" experience). Mostly
  * a read-only investigation screen — no check-in/out/break controls, no correction approve/reject
- * (that stays on `/attendance/corrections`, the HR review queue) — with one exception: requesting
+ * (that stays in the Correction Requests tab of `/attendance/issues`, the HR review queue) — with one exception: requesting
  * a *new* correction is exposed here too (restored post-Batch-9-audit, see
  * `DayCorrectionsTable`/`InvestigationCorrectionAction`), reusing the exact same
  * `RequestCorrectionDialog`/`requestCorrection` the self-service `/attendance` page already uses,

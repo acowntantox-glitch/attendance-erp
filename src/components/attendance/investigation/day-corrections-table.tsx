@@ -41,7 +41,7 @@ export function DayCorrectionsTable({
           {canRequestCorrection && !periodClosed && (
             <InvestigationCorrectionAction employeeId={employeeId} timezone={timezone} workDate={workDate} />
           )}
-          <Link href="/attendance/corrections" className="text-sm text-blue-700 hover:underline">
+          <Link href="/attendance/issues?tab=corrections" className="text-sm text-blue-700 hover:underline">
             Review queue →
           </Link>
         </div>

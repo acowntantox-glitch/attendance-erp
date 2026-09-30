@@ -103,32 +103,19 @@ export function Sidebar({ role }: { role: Role }) {
             Attendance Calendar
           </Link>
         )}
-        {/* Batch 10 — view gated on the same attendance.report.view as Reports/Calendar (MANAGER
-            excluded exactly as it already is from those); dismiss/undismiss on the page itself
-            are separately gated on attendance.exception.manage. */}
-        {can(role, "attendance.report.view") && (
+        {/* One workspace for both halves: system-detected exceptions (attendance.report.view) and
+            correction requests (attendance.correction.approve). Shown when the role holds either;
+            the page and each service re-check their own permission, and a tab the role cannot use
+            is not offered. MANAGER and EMPLOYEE hold neither, so they never see it. */}
+        {(can(role, "attendance.report.view") || can(role, "attendance.correction.approve")) && (
           <Link
-            href="/attendance/exceptions"
+            href="/attendance/issues"
             className={cn(
               "block rounded-md px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900",
-              activePath.startsWith("/attendance/exceptions") && "bg-blue-50 text-blue-700 hover:bg-blue-50 hover:text-blue-700",
+              activePath.startsWith("/attendance/issues") && "bg-blue-50 text-blue-700 hover:bg-blue-50 hover:text-blue-700",
             )}
           >
-            Attendance Exceptions
-          </Link>
-        )}
-        {/* Gated on attendance.correction.approve, not attendance.view — MANAGER holds correction
-            .request but not .approve (per the Batch 4 RBAC table), so it never sees the HR queue
-            link even though it can view attendance; the service layer enforces this independently. */}
-        {can(role, "attendance.correction.approve") && (
-          <Link
-            href="/attendance/corrections"
-            className={cn(
-              "block rounded-md px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900",
-              activePath.startsWith("/attendance/corrections") && "bg-blue-50 text-blue-700 hover:bg-blue-50 hover:text-blue-700",
-            )}
-          >
-            Attendance Corrections
+            Issues &amp; Corrections
           </Link>
         )}
         {/* Batch 8 — visible to whoever holds either half of period management; currently only

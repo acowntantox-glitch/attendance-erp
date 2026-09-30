@@ -26,8 +26,12 @@ export function ExceptionFilterBar({
   defaults,
   departments,
   locations,
+  extraParams,
 }: {
   basePath: string;
+  /** Query parameters that must survive Apply and Reset (e.g. `{ tab: "exceptions" }` when the
+   *  bar is embedded in the Issues & Corrections workspace). */
+  extraParams?: Record<string, string>;
   defaults: {
     fromDate: string;
     toDate: string;
@@ -40,12 +44,17 @@ export function ExceptionFilterBar({
   departments: Option[];
   locations: Option[];
 }) {
+  const resetHref = extraParams && Object.keys(extraParams).length > 0 ? `${basePath}?${new URLSearchParams(extraParams).toString()}` : basePath;
+
   function submitForm(event: ChangeEvent<HTMLSelectElement>) {
     event.currentTarget.form?.requestSubmit();
   }
 
   return (
     <form action={basePath} method="GET" className="space-y-3 rounded-lg border border-slate-200 bg-white p-4">
+      {Object.entries(extraParams ?? {}).map(([key, value]) => (
+        <input key={key} type="hidden" name={key} value={value} />
+      ))}
       <div className="flex flex-wrap items-end gap-3">
         <div>
           <Label htmlFor="exc-from">From</Label>
@@ -81,7 +90,7 @@ export function ExceptionFilterBar({
         <button type="submit" className="h-10 rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 hover:bg-slate-50">
           Apply
         </button>
-        <a href={basePath} className="flex h-10 items-center px-2 text-sm text-slate-500 underline-offset-2 hover:underline">
+        <a href={resetHref} className="flex h-10 items-center px-2 text-sm text-slate-500 underline-offset-2 hover:underline">
           Reset
         </a>
       </div>

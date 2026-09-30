@@ -20,7 +20,7 @@ export function HrCorrectionsTable({
   closedMonths: Set<string>;
 }) {
   if (corrections.length === 0) {
-    return <p className="px-1 py-4 text-sm text-slate-500">No corrections in this view.</p>;
+    return <p className="px-1 py-4 text-sm text-slate-500">No correction requests found.</p>;
   }
 
   return (
