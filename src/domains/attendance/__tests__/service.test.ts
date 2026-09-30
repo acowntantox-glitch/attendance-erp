@@ -289,9 +289,14 @@ describe.skipIf(!available)("attendance service", () => {
       vi.setSystemTime(new Date("2026-02-09T09:00:00Z"));
       await svc.checkIn(ctx, employeeAId);
       await expect(svc.endBreak(ctx, employeeAId)).rejects.toThrow(errors.NoOpenBreakError);
+      // Each event needs a distinct instant: events are ordered by `occurredAt` alone, so a
+      // BREAK_START and BREAK_END frozen at the same millisecond have no defined order.
+      vi.setSystemTime(new Date("2026-02-09T12:00:00Z"));
       await svc.startBreak(ctx, employeeAId);
       await expect(svc.checkOut(ctx, employeeAId)).rejects.toThrow(errors.OpenBreakExistsError);
+      vi.setSystemTime(new Date("2026-02-09T12:30:00Z"));
       await svc.endBreak(ctx, employeeAId);
+      vi.setSystemTime(new Date("2026-02-09T18:00:00Z"));
       await svc.checkOut(ctx, employeeAId);
     });
 
@@ -661,8 +666,11 @@ describe.skipIf(!available)("attendance service", () => {
       const checkInSession = await svc.checkIn(callerCtx, other.id);
       expect(checkInSession.employeeId).toBe(caller.id);
 
+      // Distinct instants for the break pair (events are ordered by `occurredAt` alone).
+      vi.setSystemTime(new Date("2026-06-15T12:00:00Z"));
       const breakEvent = await svc.startBreak(callerCtx, other.id);
       expect(breakEvent.employeeId).toBe(caller.id);
+      vi.setSystemTime(new Date("2026-06-15T12:30:00Z"));
       await svc.endBreak(callerCtx, other.id);
 
       const { session: current } = await svc.getCurrentSession(callerCtx, other.id);
@@ -920,8 +928,9 @@ describe.skipIf(!available)("attendance service", () => {
       const session = await svc.checkIn(ctx, employeeGraceId);
       vi.setSystemTime(new Date("2026-02-28T18:00:00Z"));
       await svc.checkOut(ctx, employeeGraceId);
-      const [checkInEvent] = await db.query.attendanceEvents.findMany({
-        where: eq(schema.attendanceEvents.sessionId, session.id),
+      // Select by type: an unordered findMany gives no guarantee the CHECK_IN row comes first.
+      const checkInEvent = await db.query.attendanceEvents.findFirst({
+        where: and(eq(schema.attendanceEvents.sessionId, session.id), eq(schema.attendanceEvents.eventType, "CHECK_IN")),
       });
 
       await expect(

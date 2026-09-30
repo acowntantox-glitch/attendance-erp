@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyCorrectionsToSessions, calculateDailyAttendance, normalizeExpectationPeriods } from "../calculation";
-import type { AttendanceCorrectionOverride, AttendanceSessionInput, DailyWorkforceContext } from "../model";
+import { DEFAULT_ATTENDANCE_POLICY, type AttendanceCorrectionOverride, type AttendancePolicy, type AttendanceSessionInput, type DailyWorkforceContext } from "../model";
 
 const D = (t: string) => new Date(`2026-09-23T${t}:00Z`);
 
@@ -366,5 +366,88 @@ describe("applyCorrectionsToSessions (Batch 4 correction adapter)", () => {
     const corrected = applyCorrectionsToSessions([twoBreaks], overrides);
     expect(corrected[0]!.breaks[0]!.startAt).toEqual(D("11:00")); // untouched
     expect(corrected[0]!.breaks[1]!.startAt).toEqual(D("13:50")); // corrected
+  });
+});
+
+describe("Batch 12 — attendance policy", () => {
+  const policy = (overrides: Partial<AttendancePolicy>): AttendancePolicy => ({ ...DEFAULT_ATTENDANCE_POLICY, ...overrides });
+  // Scheduled 09:00-18:00 = 540 minutes unless a test overrides the window.
+  const short = (checkIn: string, checkOut: string | null, extra: Partial<AttendanceSessionInput> = {}) =>
+    session({ checkInAt: D(checkIn), checkOutAt: checkOut ? D(checkOut) : null, ...extra });
+
+  it("DEFAULT_POLICY (and omitting the argument) reproduces the pre-policy results exactly", () => {
+    const sessions = [short("09:20", "17:30")];
+    const withoutPolicy = calculateDailyAttendance(sessions, workingDayContext);
+    expect(calculateDailyAttendance(sessions, workingDayContext, DEFAULT_ATTENDANCE_POLICY)).toEqual(withoutPolicy);
+    expect(withoutPolicy).toMatchObject({ status: "LATE", lateMinutes: 20, earlyDepartureMinutes: 30, overtimeMinutes: 0 });
+    expect(calculateDailyAttendance([short("09:00", "19:00")], workingDayContext).overtimeMinutes).toBe(60);
+  });
+
+  it("early departure grace is subtracted from the raw early minutes (15 raw, 10 grace -> 5)", () => {
+    const result = calculateDailyAttendance([short("09:00", "17:45")], workingDayContext, policy({ earlyDepartureGraceMinutes: 10 }));
+    expect(result.earlyDepartureMinutes).toBe(5);
+  });
+
+  it("early departure within grace is 0, and stays null (not 0) with no scheduled period", () => {
+    expect(calculateDailyAttendance([short("09:00", "17:55")], workingDayContext, policy({ earlyDepartureGraceMinutes: 10 })).earlyDepartureMinutes).toBe(0);
+    const noSchedule = short("09:00", "12:00", { expectedStartAt: null, expectedEndAt: null });
+    expect(calculateDailyAttendance([noSchedule], { ...workingDayContext, expectedStartAt: null, expectedEndAt: null }, policy({ earlyDepartureGraceMinutes: 10 })).earlyDepartureMinutes).toBeNull();
+  });
+
+  it("overtime threshold: worked 500 vs scheduled 480 with threshold 15 -> 5", () => {
+    const sessions = [short("09:00", "17:20", { expectedEndAt: D("17:00") })]; // worked 500, scheduled 480
+    expect(calculateDailyAttendance(sessions, workingDayContext, DEFAULT_ATTENDANCE_POLICY).overtimeMinutes).toBe(20);
+    expect(calculateDailyAttendance(sessions, workingDayContext, policy({ overtimeThresholdMinutes: 15 })).overtimeMinutes).toBe(5);
+    expect(calculateDailyAttendance(sessions, workingDayContext, policy({ overtimeThresholdMinutes: 60 })).overtimeMinutes).toBe(0);
+  });
+
+  it("overtime threshold does NOT apply on weekly-off / holiday / no-schedule days (overtime stays = worked)", () => {
+    const noWindow = { expectedStartAt: null, expectedEndAt: null };
+    const p = policy({ overtimeThresholdMinutes: 60 });
+    const weeklyOff = calculateDailyAttendance([short("09:00", "13:00", noWindow)], { ...workingDayContext, isWeeklyOff: true, isWorkingDay: false, ...noWindow }, p);
+    expect(weeklyOff).toMatchObject({ status: "WEEKLY_OFF_WORKED", workedMinutes: 240, overtimeMinutes: 240 });
+    const holiday = calculateDailyAttendance([short("09:00", "13:00", noWindow)], { ...workingDayContext, isHoliday: true, isWorkingDay: false, ...noWindow }, p);
+    expect(holiday).toMatchObject({ status: "HOLIDAY_WORKED", overtimeMinutes: 240 });
+    const noSchedule = calculateDailyAttendance([short("09:00", "13:00", noWindow)], { ...workingDayContext, ...noWindow }, p);
+    expect(noSchedule).toMatchObject({ status: "NO_SCHEDULE", overtimeMinutes: 240 });
+  });
+
+  it("minimum worked minutes: scheduled 480, minimum 420, worked 400 -> UNDER_HOURS", () => {
+    const sessions = [short("09:00", "15:40", { expectedEndAt: D("17:00") })]; // worked 400, scheduled 480
+    expect(calculateDailyAttendance(sessions, workingDayContext, policy({ minimumWorkedMinutes: 420 })).status).toBe("UNDER_HOURS");
+    expect(calculateDailyAttendance(sessions, workingDayContext, policy({ minimumWorkedMinutes: 400 })).status).toBe("PRESENT");
+  });
+
+  it("minimum disabled (null): a short day keeps today's status", () => {
+    const sessions = [short("09:00", "12:00")];
+    expect(calculateDailyAttendance(sessions, workingDayContext, policy({ minimumWorkedMinutes: null })).status).toBe("PRESENT");
+  });
+
+  it("minimum is capped by the scheduled minutes: scheduled 360, minimum 420, worked 360 -> PRESENT", () => {
+    const sessions = [short("09:00", "15:00", { expectedEndAt: D("15:00") })];
+    const result = calculateDailyAttendance(sessions, workingDayContext, policy({ minimumWorkedMinutes: 420 }));
+    expect(result).toMatchObject({ scheduledMinutes: 360, workedMinutes: 360, status: "PRESENT" });
+    expect(calculateDailyAttendance([short("09:00", "14:59", { expectedEndAt: D("15:00") })], workingDayContext, policy({ minimumWorkedMinutes: 420 })).status).toBe("UNDER_HOURS");
+  });
+
+  it("LATE outranks UNDER_HOURS", () => {
+    const result = calculateDailyAttendance([short("09:30", "12:00")], workingDayContext, policy({ minimumWorkedMinutes: 420 }));
+    expect(result.status).toBe("LATE");
+  });
+
+  it("INCOMPLETE (open session) outranks UNDER_HOURS, and worked stays null", () => {
+    const result = calculateDailyAttendance([short("09:00", null, { status: "OPEN" })], workingDayContext, policy({ minimumWorkedMinutes: 420 }));
+    expect(result).toMatchObject({ status: "INCOMPLETE", workedMinutes: null });
+  });
+
+  it("never yields UNDER_HOURS on holiday, weekly off, no-schedule, or an absent day", () => {
+    const p = policy({ minimumWorkedMinutes: 420 });
+    const noWindow = { expectedStartAt: null, expectedEndAt: null };
+    expect(calculateDailyAttendance([], { ...workingDayContext, isHoliday: true, isWorkingDay: false, ...noWindow }, p).status).toBe("HOLIDAY");
+    expect(calculateDailyAttendance([short("09:00", "10:00", noWindow)], { ...workingDayContext, isHoliday: true, isWorkingDay: false, ...noWindow }, p).status).toBe("HOLIDAY_WORKED");
+    expect(calculateDailyAttendance([], { ...workingDayContext, isWeeklyOff: true, isWorkingDay: false, ...noWindow }, p).status).toBe("WEEKLY_OFF");
+    expect(calculateDailyAttendance([short("09:00", "10:00", noWindow)], { ...workingDayContext, isWeeklyOff: true, isWorkingDay: false, ...noWindow }, p).status).toBe("WEEKLY_OFF_WORKED");
+    expect(calculateDailyAttendance([short("09:00", "10:00", noWindow)], { ...workingDayContext, ...noWindow }, p).status).toBe("NO_SCHEDULE");
+    expect(calculateDailyAttendance([], workingDayContext, p).status).toBe("ABSENT");
   });
 });

@@ -146,6 +146,19 @@ export function Sidebar({ role }: { role: Role }) {
             Attendance Periods
           </Link>
         )}
+        {/* Batch 12 — company attendance policy; HR_MANAGER can view, only HR_ADMIN and above can
+            save (enforced again by the service layer). */}
+        {can(role, "attendance.policy.view") && (
+          <Link
+            href="/attendance/policy"
+            className={cn(
+              "block rounded-md px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900",
+              activePath.startsWith("/attendance/policy") && "bg-blue-50 text-blue-700 hover:bg-blue-50 hover:text-blue-700",
+            )}
+          >
+            Attendance Policy
+          </Link>
+        )}
       </nav>
     </aside>
   );

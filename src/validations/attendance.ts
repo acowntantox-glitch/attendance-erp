@@ -18,7 +18,19 @@ const attendanceDailyStatusValues = [
   "WEEKLY_OFF_WORKED",
   "HOLIDAY_WORKED",
   "NO_SCHEDULE",
+  "UNDER_HOURS",
 ] as const;
+
+/** Batch 12 — safe ranges: a grace/threshold beyond a few hours is almost certainly a typo, and
+ *  the minimum can never exceed a day. All whole, non-negative minutes; the minimum is nullable
+ *  (null disables UNDER_HOURS). */
+export const updateAttendancePolicySchema = z.object({
+  defaultGracePeriodMinutes: z.number().int().min(0).max(240),
+  earlyDepartureGraceMinutes: z.number().int().min(0).max(240),
+  overtimeThresholdMinutes: z.number().int().min(0).max(480),
+  minimumWorkedMinutes: z.number().int().min(0).max(1440).nullable(),
+});
+export type UpdateAttendancePolicyInput = z.infer<typeof updateAttendancePolicySchema>;
 
 export const attendanceActionSchema = z.object({
   idempotencyKey: z.uuid().optional(),

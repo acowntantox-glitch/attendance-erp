@@ -5,11 +5,36 @@ import type {
   attendanceEvents,
   attendanceEventTypeEnum,
   attendanceOpenSessions,
+  attendancePolicies,
   attendanceSourceEnum,
 } from "@/db/schema";
 import type { Shift, WorkSchedule } from "@/domains/workforce/model";
 
 export type AttendanceSession = typeof attendanceOpenSessions.$inferSelect;
+
+export type AttendancePolicyRow = typeof attendancePolicies.$inferSelect;
+
+/** The four policy knobs the calculation path consumes (Batch 12) — a pure value type with no
+ *  ids/timestamps, so the calculation engine never sees a database row. */
+export type AttendancePolicy = {
+  /** Fallback grace for a schedule assigned without a shift. Shift grace stays authoritative. */
+  defaultGracePeriodMinutes: number;
+  /** Minutes of early departure forgiven before any is recorded. */
+  earlyDepartureGraceMinutes: number;
+  /** Minutes beyond scheduled time before overtime begins (scheduled days only). */
+  overtimeThresholdMinutes: number;
+  /** Null disables UNDER_HOURS. Otherwise capped at the day's scheduled minutes. */
+  minimumWorkedMinutes: number | null;
+};
+
+/** What a company with no `attendance_policies` row gets — reproduces the pre-Batch-12 behavior
+ *  exactly (no fallback grace, no early grace, overtime from the first extra minute, no UNDER_HOURS). */
+export const DEFAULT_ATTENDANCE_POLICY: AttendancePolicy = Object.freeze({
+  defaultGracePeriodMinutes: 0,
+  earlyDepartureGraceMinutes: 0,
+  overtimeThresholdMinutes: 0,
+  minimumWorkedMinutes: null,
+});
 
 /** A session with its captured-at-check-in schedule/shift rows attached (via the relations
  *  already defined in schema/relations.ts) — display-only; the calculation engine never reads

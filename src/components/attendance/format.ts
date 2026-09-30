@@ -17,6 +17,7 @@ export const STATUS_LABEL: Record<AttendanceDailyStatus, string> = {
   WEEKLY_OFF_WORKED: "Worked on Weekly Off",
   HOLIDAY_WORKED: "Worked on Holiday",
   NO_SCHEDULE: "No Schedule",
+  UNDER_HOURS: "Under Hours",
 };
 
 /** Compact 1-3 character glyphs for narrow matrix cells (Batch 7 monthly calendar) — every one of
@@ -34,6 +35,7 @@ export const STATUS_SHORT_LABEL: Record<AttendanceDailyStatus, string> = {
   WEEKLY_OFF_WORKED: "W",
   HOLIDAY_WORKED: "H/W",
   NO_SCHEDULE: "NS",
+  UNDER_HOURS: "UH",
 };
 
 const NOT_AVAILABLE = "Not available";

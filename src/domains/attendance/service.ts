@@ -11,6 +11,7 @@ import { getWorkforceDayInfo, resolveEmployeeTimezone } from "@/domains/workforc
 import { addDays, utcToZonedWallTime, zonedWallTimeToUtc } from "@/lib/datetime";
 import { applyCorrectionsToSessions, calculateDailyAttendance, closedBreakMinutes, diffMinutes } from "./calculation";
 import { assertAttendancePeriodOpen, isAttendancePeriodClosed } from "./periods/attendance-period.service";
+import { resolveAttendancePolicy } from "./policy/attendance-policy.service";
 import {
   attendanceCorrectionRepository,
   attendanceDailyRecordRepository,
@@ -36,6 +37,7 @@ import {
 } from "./errors";
 import type {
   AttendanceCorrection,
+  AttendancePolicy,
   AttendanceCorrectionField,
   AttendanceCorrectionOverride,
   AttendanceCorrectionQueueItem,
@@ -109,14 +111,16 @@ async function resolveCheckInContext(ctx: RequestContext, employeeId: string, ch
     workDate = utcToZonedWallTime(checkInInstant, timezone).date;
   }
 
-  const dayInfo = await getWorkforceDayInfo(ctx, employeeId, workDate);
+  const [dayInfo, policy] = await Promise.all([getWorkforceDayInfo(ctx, employeeId, workDate), resolveAttendancePolicy(ctx.companyId)]);
   const window = dayInfo.expectedWindow;
   return {
     workDate,
     dayInfo,
     expectedStartAt: window ? zonedWallTimeToUtc(window.start.date, window.start.time, dayInfo.timezone) : null,
     expectedEndAt: window ? zonedWallTimeToUtc(window.end.date, window.end.time, dayInfo.timezone) : null,
-    gracePeriodMinutes: dayInfo.scheduleAssignment?.shift?.gracePeriodMinutes ?? 0,
+    // Shift grace is authoritative; the company policy is only a fallback for a schedule with no
+    // shift. The value is frozen on the session, so a later policy change never rewrites history.
+    gracePeriodMinutes: dayInfo.scheduleAssignment?.shift?.gracePeriodMinutes ?? policy.defaultGracePeriodMinutes,
   };
 }
 
@@ -522,6 +526,7 @@ async function buildCorrectionOverride(
   ctx: RequestContext,
   correction: AttendanceCorrection,
   executor: DbExecutor,
+  policy: AttendancePolicy,
 ): Promise<AttendanceCorrectionOverride> {
   if (correction.eventId) {
     const event = await attendanceEventRepository.findById(correction.eventId, executor);
@@ -549,7 +554,7 @@ async function buildCorrectionOverride(
       syntheticSnapshot: {
         expectedStartAt: window ? zonedWallTimeToUtc(window.start.date, window.start.time, dayInfo.timezone) : null,
         expectedEndAt: window ? zonedWallTimeToUtc(window.end.date, window.end.time, dayInfo.timezone) : null,
-        gracePeriodMinutes: dayInfo.scheduleAssignment?.shift?.gracePeriodMinutes ?? 0,
+        gracePeriodMinutes: dayInfo.scheduleAssignment?.shift?.gracePeriodMinutes ?? policy.defaultGracePeriodMinutes,
         isHoliday: dayInfo.isHoliday,
         isWeeklyOff: dayInfo.isWeeklyOff,
         isWorkingDay: dayInfo.isWorkingDay,
@@ -575,12 +580,17 @@ async function recalculateDailyRecordInternal(
 ): Promise<AttendanceDailyRecord> {
   const sessions = await buildSessionInputs(employeeId, workDate, executor);
 
+  // Batch 12 — the company policy is loaded exactly once here (the one path shared by check-out,
+  // manual recalculation, correction approval and day processing) and passed down, never re-read
+  // per correction or per caller. It applies to this calculation only; see attendance-policy.service.ts.
+  const policy = await resolveAttendancePolicy(ctx.companyId, executor);
+
   // Only APPROVED corrections may affect calculation — PENDING/REJECTED never reach this list
   // (see attendanceCorrectionRepository.listApprovedForWorkDate). This is the one authoritative
   // calculation path: both manual recalculation and approval-triggered recalculation go through
   // exactly this function, so they can never disagree.
   const approvedCorrections = await attendanceCorrectionRepository.listApprovedForWorkDate(employeeId, workDate, executor);
-  const overrides = await Promise.all(approvedCorrections.map((correction) => buildCorrectionOverride(ctx, correction, executor)));
+  const overrides = await Promise.all(approvedCorrections.map((correction) => buildCorrectionOverride(ctx, correction, executor, policy)));
   const correctedSessions = applyCorrectionsToSessions(sessions, overrides);
 
   const dayInfo = await getWorkforceDayInfo(ctx, employeeId, workDate);
@@ -592,10 +602,10 @@ async function recalculateDailyRecordInternal(
     isWorkingDay: dayInfo.isWorkingDay,
     expectedStartAt: window ? zonedWallTimeToUtc(window.start.date, window.start.time, dayInfo.timezone) : null,
     expectedEndAt: window ? zonedWallTimeToUtc(window.end.date, window.end.time, dayInfo.timezone) : null,
-    gracePeriodMinutes: dayInfo.scheduleAssignment?.shift?.gracePeriodMinutes ?? 0,
+    gracePeriodMinutes: dayInfo.scheduleAssignment?.shift?.gracePeriodMinutes ?? policy.defaultGracePeriodMinutes,
   };
 
-  const result = calculateDailyAttendance(correctedSessions, dayContext);
+  const result = calculateDailyAttendance(correctedSessions, dayContext, policy);
 
   return attendanceDailyRecordRepository.upsert(executor, {
     companyId: ctx.companyId,

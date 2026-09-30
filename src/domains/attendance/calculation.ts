@@ -4,13 +4,20 @@
  * AMENDMENT": expectation normalization over distinct per-session snapshots, then day-level
  * aggregation. See that document for the full derivation; this module implements its formulas
  * directly, section by section, with matching comments.
+ *
+ * Batch 12: the company `AttendancePolicy` is an explicit, defaulted parameter of
+ * `calculateDailyAttendance` — this module stays pure and never loads it. Late grace is NOT read
+ * from the policy here: it is frozen per session at check-in (shift grace, else the policy's
+ * fallback), so history never shifts when a policy changes.
  */
-import type {
-  AttendanceCorrectionOverride,
-  AttendanceSessionInput,
-  DailyCalculationResult,
-  DailyWorkforceContext,
-  NormalizedExpectationPeriod,
+import {
+  DEFAULT_ATTENDANCE_POLICY,
+  type AttendanceCorrectionOverride,
+  type AttendancePolicy,
+  type AttendanceSessionInput,
+  type DailyCalculationResult,
+  type DailyWorkforceContext,
+  type NormalizedExpectationPeriod,
 } from "./model";
 
 const MS_PER_MINUTE = 60_000;
@@ -179,7 +186,11 @@ export function applyCorrectionsToSessions(
  * status classification and the zero-session ABSENT/NO_SCHEDULE case, never to override any
  * session's own frozen snapshot (see model.ts `DailyWorkforceContext`).
  */
-export function calculateDailyAttendance(sessions: AttendanceSessionInput[], dayContext: DailyWorkforceContext): DailyCalculationResult {
+export function calculateDailyAttendance(
+  sessions: AttendanceSessionInput[],
+  dayContext: DailyWorkforceContext,
+  policy: AttendancePolicy = DEFAULT_ATTENDANCE_POLICY,
+): DailyCalculationResult {
   const ordered = sessions.slice().sort((a, b) => a.checkInAt.getTime() - b.checkInAt.getTime());
   const periods = normalizeExpectationPeriods(ordered);
 
@@ -213,13 +224,19 @@ export function calculateDailyAttendance(sessions: AttendanceSessionInput[], day
     ? Math.max(0, diffMinutes(firstPeriod.expectedStart, firstCheckInAt!) - firstPeriod.gracePeriodMinutes)
     : null;
 
+  // Policy early-departure grace is subtracted from the raw minutes, exactly like late grace.
   const earlyDepartureMinutes =
-    lastPeriod && lastCheckOutAt !== null ? Math.max(0, diffMinutes(lastCheckOutAt, lastPeriod.operativeEnd)) : null;
+    lastPeriod && lastCheckOutAt !== null
+      ? Math.max(0, diffMinutes(lastCheckOutAt, lastPeriod.operativeEnd) - policy.earlyDepartureGraceMinutes)
+      : null;
 
   // With scheduledMinutes = 0 (holiday/weekly-off/no-schedule with no expectation period), this
   // collapses to exactly workedMinutes — confirmed intentional for NO_SCHEDULE (Batch 1 closure
   // decision) and matches the pre-existing HOLIDAY_WORKED/WEEKLY_OFF_WORKED precedent.
-  const overtimeMinutes = workedMinutes === null ? null : Math.max(0, workedMinutes - scheduledMinutes);
+  // The policy threshold applies only when a scheduled period exists; weekly-off/holiday/no-schedule
+  // days keep overtime = worked minutes.
+  const overtimeThresholdMinutes = periods.length > 0 ? policy.overtimeThresholdMinutes : 0;
+  const overtimeMinutes = workedMinutes === null ? null : Math.max(0, workedMinutes - scheduledMinutes - overtimeThresholdMinutes);
 
   const status = determineStatus({
     dayContext,
@@ -227,6 +244,9 @@ export function calculateDailyAttendance(sessions: AttendanceSessionInput[], day
     hasPeriods: periods.length > 0,
     hasUnclosedSession,
     lateMinutes,
+    workedMinutes,
+    scheduledMinutes,
+    minimumWorkedMinutes: policy.minimumWorkedMinutes,
   });
 
   return {
@@ -249,8 +269,11 @@ function determineStatus(args: {
   hasPeriods: boolean;
   hasUnclosedSession: boolean;
   lateMinutes: number | null;
+  workedMinutes: number | null;
+  scheduledMinutes: number;
+  minimumWorkedMinutes: number | null;
 }): DailyCalculationResult["status"] {
-  const { dayContext, sessionCount, hasPeriods, hasUnclosedSession, lateMinutes } = args;
+  const { dayContext, sessionCount, hasPeriods, hasUnclosedSession, lateMinutes, workedMinutes, scheduledMinutes, minimumWorkedMinutes } = args;
 
   if (dayContext.isHoliday) return sessionCount > 0 ? "HOLIDAY_WORKED" : "HOLIDAY";
   if (dayContext.isWeeklyOff) return sessionCount > 0 ? "WEEKLY_OFF_WORKED" : "WEEKLY_OFF";
@@ -277,5 +300,12 @@ function determineStatus(args: {
 
   if (hasUnclosedSession) return "INCOMPLETE";
   if (lateMinutes !== null && lateMinutes > 0) return "LATE";
+
+  // UNDER_HOURS: only reached for a complete, on-time, scheduled day (holiday/weekly-off/no-schedule/
+  // INCOMPLETE/LATE all returned above). The minimum is capped at the scheduled minutes so a policy
+  // minimum can never make a short scheduled day impossible to satisfy.
+  if (minimumWorkedMinutes !== null && workedMinutes !== null && workedMinutes < Math.min(minimumWorkedMinutes, scheduledMinutes)) {
+    return "UNDER_HOURS";
+  }
   return "PRESENT";
 }

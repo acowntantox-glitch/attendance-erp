@@ -23,6 +23,7 @@ export function CalendarSummaryCards({
     { label: "Processed Employee-Days", value: summary.processedEmployeeDays },
     { label: STATUS_LABEL.PRESENT, value: summary.statusCounts.PRESENT },
     { label: STATUS_LABEL.LATE, value: summary.statusCounts.LATE },
+    { label: STATUS_LABEL.UNDER_HOURS, value: summary.statusCounts.UNDER_HOURS },
     { label: STATUS_LABEL.ABSENT, value: summary.statusCounts.ABSENT },
     { label: STATUS_LABEL.INCOMPLETE, value: summary.statusCounts.INCOMPLETE },
     { label: "Unprocessed", value: summary.unprocessedEmployeeDays },

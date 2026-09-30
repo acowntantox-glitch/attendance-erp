@@ -37,7 +37,7 @@ function CalendarCellView({
     cell.status === "ABSENT" && "bg-red-50 text-red-700",
     cell.status === "LATE" && "bg-amber-50 text-amber-700",
     (cell.status === "PRESENT" || cell.status === "WEEKLY_OFF_WORKED" || cell.status === "HOLIDAY_WORKED") && "bg-green-50 text-green-700",
-    cell.status === "INCOMPLETE" && "bg-amber-50 text-amber-700",
+    (cell.status === "INCOMPLETE" || cell.status === "UNDER_HOURS") && "bg-amber-50 text-amber-700",
   );
 
   if (!cell.hasRecord) {

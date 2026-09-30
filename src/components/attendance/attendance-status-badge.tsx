@@ -12,6 +12,7 @@ const STATUS_VARIANT: Record<AttendanceDailyStatus, NonNullable<BadgeProps["vari
   WEEKLY_OFF_WORKED: "info",
   HOLIDAY_WORKED: "info",
   NO_SCHEDULE: "neutral",
+  UNDER_HOURS: "warning",
 };
 
 /** Color is never the only signal — the label text always states the status in words too. */

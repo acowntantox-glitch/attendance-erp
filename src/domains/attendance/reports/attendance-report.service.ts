@@ -101,6 +101,7 @@ const CSV_STATUS_LABEL: Record<AttendanceDailyStatus, string> = {
   WEEKLY_OFF_WORKED: "Worked on Weekly Off",
   HOLIDAY_WORKED: "Worked on Holiday",
   NO_SCHEDULE: "No Schedule",
+  UNDER_HOURS: "Under Hours",
 };
 
 /** "HH:MM", zero-padded, matching §21's example ("08:00", "09:35", "00:35"). `null` (an

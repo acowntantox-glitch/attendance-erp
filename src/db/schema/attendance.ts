@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { boolean, date, index, integer, jsonb, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { boolean, check, date, index, integer, jsonb, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { id, timestamps } from "./common";
 import { companies } from "./organization";
 import { employees } from "./employee";
@@ -25,6 +25,7 @@ export const attendanceDailyStatusEnum = pgEnum("attendance_daily_status", [
   "WEEKLY_OFF_WORKED",
   "HOLIDAY_WORKED",
   "NO_SCHEDULE",
+  "UNDER_HOURS",
 ]);
 
 export const attendanceCorrectionStatusEnum = pgEnum("attendance_correction_status", ["PENDING", "APPROVED", "REJECTED"]);
@@ -301,5 +302,39 @@ export const attendanceExceptionDismissals = pgTable(
     // uses; the unique index above already covers employeeId+workDate as a prefix, but a
     // companyId-scoped one avoids ever having to fall back to a full-table scan within a company.
     index("attendance_exception_dismissals_company_workdate_idx").on(table.companyId, table.workDate),
+  ],
+);
+
+/**
+ * Batch 12 — the one company-level attendance policy. At most one row per company (unique
+ * `company_id`); a company that has never configured a policy simply has no row and the
+ * calculation path falls back to `DEFAULT_ATTENDANCE_POLICY` (see domains/attendance/model.ts),
+ * which reproduces the pre-policy behavior exactly — so no backfill is needed.
+ *
+ * Deliberately just these four knobs: Workforce (shifts/schedules) remains the source of truth for
+ * start/end/break/grace-per-shift, and this table never duplicates it. `default_grace_period_minutes`
+ * is only a fallback for a schedule assigned without a shift (shift grace stays authoritative).
+ * `minimum_worked_minutes` null means the UNDER_HOURS status is disabled.
+ */
+export const attendancePolicies = pgTable(
+  "attendance_policies",
+  {
+    id: id(),
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => companies.id, { onDelete: "cascade" }),
+    defaultGracePeriodMinutes: integer("default_grace_period_minutes").notNull().default(0),
+    earlyDepartureGraceMinutes: integer("early_departure_grace_minutes").notNull().default(0),
+    overtimeThresholdMinutes: integer("overtime_threshold_minutes").notNull().default(0),
+    minimumWorkedMinutes: integer("minimum_worked_minutes"),
+    updatedByUserId: uuid("updated_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("attendance_policies_company_unique").on(table.companyId),
+    check("attendance_policies_default_grace_nonneg", sql`${table.defaultGracePeriodMinutes} >= 0`),
+    check("attendance_policies_early_grace_nonneg", sql`${table.earlyDepartureGraceMinutes} >= 0`),
+    check("attendance_policies_overtime_threshold_nonneg", sql`${table.overtimeThresholdMinutes} >= 0`),
+    check("attendance_policies_minimum_worked_nonneg", sql`${table.minimumWorkedMinutes} is null or ${table.minimumWorkedMinutes} >= 0`),
   ],
 );
