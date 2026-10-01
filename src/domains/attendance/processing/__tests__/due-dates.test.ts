@@ -67,3 +67,27 @@ describe("computeDueWorkDates", () => {
     expect(computeDueWorkDates({ ...base, lookbackDays: 0, now: Z("2026-04-10T12:00:00Z") })).toEqual([]);
   });
 });
+
+describe("F-07 - the scheduled job never materializes a date that has not finished", () => {
+  it("for any 'now' and any timezone mix, no due date is today (or later) in ANY of the company's timezones", () => {
+    const zones = ["UTC", "Asia/Dubai", "America/Los_Angeles", "Pacific/Kiritimati", "Pacific/Pago_Pago"];
+    for (let hour = 0; hour < 24 * 3; hour += 5) {
+      const now = new Date(Date.UTC(2026, 6, 20, 0, 0) + hour * 3_600_000);
+      const due = computeDueWorkDates({ now, timezones: zones, windows: [], lagMinutes: 0, lookbackDays: 7 });
+      for (const date of due) {
+        for (const zone of zones) {
+          const localToday = new Intl.DateTimeFormat("en-CA", { timeZone: zone }).format(now); // YYYY-MM-DD
+          expect(date < localToday).toBe(true); // strictly before the local calendar day: the day is over there
+        }
+      }
+    }
+  });
+
+  it("a date becomes due only after its overnight shift has ended", () => {
+    const night = [{ startTime: "22:00:00", endTime: "06:00:00" }];
+    const justBefore = computeDueWorkDates({ now: Z("2026-04-10T05:59:00Z"), timezones: ["UTC"], windows: night, lagMinutes: 0, lookbackDays: 1 });
+    const after = computeDueWorkDates({ now: Z("2026-04-10T06:01:00Z"), timezones: ["UTC"], windows: night, lagMinutes: 0, lookbackDays: 1 });
+    expect(justBefore).not.toContain("2026-04-09");
+    expect(after).toContain("2026-04-09");
+  });
+});

@@ -131,7 +131,7 @@ describe.skipIf(!available)("attendance processing service", () => {
 
   describe("Operation 1 — process one employee/date", () => {
     it("Test 1: scheduled workday, no attendance -> materializes ABSENT with zero worked/overtime minutes and no attendance event", async () => {
-      const workDate = "2027-01-04"; // a Monday
+      const workDate = "2021-01-04"; // a Monday
       const result = await proc.processEmployeeAttendanceDay(ctx, { employeeId: employeeScheduledId, workDate });
       expect(result.status).toBe("ABSENT");
       expect(result.created).toBe(true);
@@ -148,7 +148,7 @@ describe.skipIf(!available)("attendance processing service", () => {
     });
 
     it("Test 2: scheduled workday with real attendance -> uses the existing calculation engine, not a fabricated ABSENT", async () => {
-      const workDate = "2027-01-05";
+      const workDate = "2021-01-05";
       vi.setSystemTime(new Date(`${workDate}T09:00:00Z`));
       await svc.checkIn(ctx, employeeScheduledId);
       vi.setSystemTime(new Date(`${workDate}T18:00:00Z`));
@@ -161,7 +161,7 @@ describe.skipIf(!available)("attendance processing service", () => {
     });
 
     it("Test 3 & 4: holiday with no attendance -> HOLIDAY; holiday with attendance -> HOLIDAY_WORKED", async () => {
-      const holidayDate = "2027-01-06";
+      const holidayDate = "2021-01-06";
       await workforceSvc.createHoliday(ctx, { name: `Proc Test Holiday ${Date.now()}`, date: holidayDate, holidayType: "PUBLIC" });
 
       const noAttendance = await proc.processEmployeeAttendanceDay(ctx, { employeeId: employeeScheduledId, workDate: holidayDate });
@@ -178,7 +178,7 @@ describe.skipIf(!available)("attendance processing service", () => {
     });
 
     it("Test 5 & 6: weekly off with no attendance -> WEEKLY_OFF; weekly off with attendance -> WEEKLY_OFF_WORKED", async () => {
-      const weeklyOffDate = "2027-01-07";
+      const weeklyOffDate = "2021-01-07";
       const dow = new Date(`${weeklyOffDate}T12:00:00Z`).getUTCDay();
 
       const employee = await employeeService.createEmployee(ctx, {
@@ -211,7 +211,7 @@ describe.skipIf(!available)("attendance processing service", () => {
     });
 
     it("Test 7 & 8: no schedule assignment, no attendance -> NO_SCHEDULE (zero minutes); no schedule with attendance -> NO_SCHEDULE with real worked minutes, null late/early, overtime = worked", async () => {
-      const workDate = "2027-01-08";
+      const workDate = "2021-01-08";
       const noAttendance = await proc.processEmployeeAttendanceDay(ctx, { employeeId: employeeNoScheduleId, workDate });
       expect(noAttendance.status).toBe("NO_SCHEDULE");
       expect(noAttendance.record.scheduledMinutes).toBe(0);
@@ -240,7 +240,7 @@ describe.skipIf(!available)("attendance processing service", () => {
     });
 
     it("Test 9: a missing checkout stays INCOMPLETE, never ABSENT, and no checkout is fabricated", async () => {
-      const workDate = "2027-01-11";
+      const workDate = "2021-01-11";
       vi.setSystemTime(new Date(`${workDate}T09:00:00Z`));
       await svc.checkIn(ctx, employeeScheduledId);
 
@@ -255,7 +255,7 @@ describe.skipIf(!available)("attendance processing service", () => {
     });
 
     it("Test 10: multiple sessions in one day are aggregated by the existing calculation engine, not assumed to be one pair", async () => {
-      const workDate = "2027-01-12";
+      const workDate = "2021-01-12";
       vi.setSystemTime(new Date(`${workDate}T09:00:00Z`));
       await svc.checkIn(ctx, employeeScheduledId);
       vi.setSystemTime(new Date(`${workDate}T12:00:00Z`));
@@ -271,11 +271,12 @@ describe.skipIf(!available)("attendance processing service", () => {
     });
 
     it("Test 11 & 12: an approved correction affects the processed calculation; a rejected one does not", async () => {
-      const workDate = "2027-01-13";
+      const workDate = "2021-01-13";
       vi.setSystemTime(new Date(`${workDate}T09:00:00Z`));
       await svc.checkIn(ctx, employeeScheduledId);
       // Forgot to check out.
 
+      vi.setSystemTime(new Date(`${workDate}T23:30:00Z`)); // F-07-bump: a correction can only name a time that has already happened
       const approved = await svc.requestCorrection(ctx, employeeScheduledId, {
         workDate,
         fieldChanged: "CHECK_OUT",
@@ -290,10 +291,11 @@ describe.skipIf(!available)("attendance processing service", () => {
       expect(afterApproval.record.workedMinutes).toBe(540);
 
       // A second, independent employee/date pair for the rejected-correction half of this test.
-      const workDate2 = "2027-01-14";
+      const workDate2 = "2021-01-14";
       vi.setSystemTime(new Date(`${workDate2}T09:00:00Z`));
       await svc.checkIn(ctx, employeeScheduledId);
 
+      vi.setSystemTime(new Date(workDate2 + "T23:30:00Z")); // F-07-bump: a correction can only name a time that has already happened
       const rejected = await svc.requestCorrection(ctx, employeeScheduledId, {
         workDate: workDate2,
         fieldChanged: "CHECK_OUT",
@@ -318,7 +320,7 @@ describe.skipIf(!available)("attendance processing service", () => {
       });
       await employeeService.archiveEmployee(ctx, employee.id);
 
-      const workDate = "2027-01-15";
+      const workDate = "2021-01-15";
       await expect(proc.processEmployeeAttendanceDay(ctx, { employeeId: employee.id, workDate })).rejects.toThrow(
         errors.EmployeeNotEligibleForProcessingError,
       );
@@ -326,7 +328,7 @@ describe.skipIf(!available)("attendance processing service", () => {
     });
 
     it("Test 14: an employee from a different company is rejected (tenant isolation)", async () => {
-      const workDate = "2027-01-15";
+      const workDate = "2021-01-15";
       await expect(proc.processEmployeeAttendanceDay(ctxCompanyB, { employeeId: employeeScheduledId, workDate })).rejects.toThrow(
         AuthorizationError,
       );
@@ -338,16 +340,16 @@ describe.skipIf(!available)("attendance processing service", () => {
         firstName: "Proc",
         lastName: `FutureJoiner-${Date.now()}`,
         workEmail: `proc-futurejoiner-${Date.now()}@test.local`,
-        dateOfJoining: "2027-06-01",
+        dateOfJoining: "2021-06-01",
         locationId: branchId,
       });
-      await expect(proc.processEmployeeAttendanceDay(ctx, { employeeId: employee.id, workDate: "2027-01-15" })).rejects.toThrow(
+      await expect(proc.processEmployeeAttendanceDay(ctx, { employeeId: employee.id, workDate: "2021-01-15" })).rejects.toThrow(
         errors.EmployeeNotEligibleForProcessingError,
       );
     });
 
     it("Test 15: processing the same employee/date twice is idempotent — exactly one daily record, no duplicate correction/event side effects", async () => {
-      const workDate = "2027-01-18";
+      const workDate = "2021-01-18";
       vi.setSystemTime(new Date(`${workDate}T09:00:00Z`));
       await svc.checkIn(ctx, employeeScheduledId);
       vi.setSystemTime(new Date(`${workDate}T18:00:00Z`));
@@ -360,7 +362,7 @@ describe.skipIf(!available)("attendance processing service", () => {
     });
 
     it("Test 16: concurrent processing of the same employee/date produces exactly one daily record", async () => {
-      const workDate = "2027-01-19";
+      const workDate = "2021-01-19";
       const [a, b] = await Promise.allSettled([
         proc.processEmployeeAttendanceDay(ctx, { employeeId: employeeScheduledId, workDate }),
         proc.processEmployeeAttendanceDay(ctx, { employeeId: employeeScheduledId, workDate }),
@@ -372,7 +374,7 @@ describe.skipIf(!available)("attendance processing service", () => {
 
   describe("Operation 2 — process company/date", () => {
     it("processes every eligible employee, excludes the archived one, and reports aggregate statistics", async () => {
-      const workDate = "2027-02-01"; // a Monday, unused by any other test in this file
+      const workDate = "2021-02-01"; // a Monday, unused by any other test in this file
       const stats = await proc.processCompanyAttendanceDay(ctx, { workDate });
 
       expect(stats.failed).toBe(0);
@@ -392,7 +394,7 @@ describe.skipIf(!available)("attendance processing service", () => {
       // that one fixture would always be a legitimate, expected "uncomputed" employee (they
       // hadn't joined yet), which is a dateOfJoining-eligibility case already covered by its own
       // test above, not what this test is checking.
-      const workDate = "2027-06-15";
+      const workDate = "2021-06-15";
       const before = await svc.getAttendanceDashboard(ctx, { workDate, page: 1, pageSize: 10 });
       expect(before.summary.employeesWithoutRecord).toBeGreaterThan(0);
 
@@ -403,7 +405,7 @@ describe.skipIf(!available)("attendance processing service", () => {
     });
 
     it("a company-wide process call never touches another company's employees", async () => {
-      const workDate = "2027-02-03";
+      const workDate = "2021-02-03";
       const stats = await proc.processCompanyAttendanceDay(ctxCompanyB, { workDate });
       expect(stats.totalEmployees).toBe(0);
       expect(await countDailyRecords(employeeScheduledId, workDate)).toBe(0);

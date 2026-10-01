@@ -1,8 +1,25 @@
-import { AuthorizationError, BusinessRuleError, ConflictError, NotFoundError } from "@/lib/errors";
+import { AuthorizationError, BusinessRuleError, ConflictError, NotFoundError, ValidationError } from "@/lib/errors";
 
 export class AlreadyCheckedInError extends ConflictError {
   constructor() {
     super("This employee already has an open attendance session for this work date. Check out before checking in again.");
+  }
+}
+
+/** F-20 - an idempotency key is only a safe retry token for the SAME action. Reusing one for a different
+ *  attendance action (e.g. a check-out sent with the key a check-in already used) is refused instead of
+ *  silently returning the other action's result. */
+export class IdempotencyKeyReuseError extends ConflictError {
+  constructor() {
+    super("This idempotency key was already used for a different attendance action. Use a new key for each action.");
+  }
+}
+
+/** F-07 - an attendance write that refers to a date or time that has not happened yet, or to a date the
+ *  employee could not have worked (before joining). Nothing was written. */
+export class InvalidAttendanceDateError extends ValidationError {
+  constructor(message: string) {
+    super(message);
   }
 }
 

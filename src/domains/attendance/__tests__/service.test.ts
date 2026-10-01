@@ -933,6 +933,7 @@ describe.skipIf(!available)("attendance service", () => {
         where: and(eq(schema.attendanceEvents.sessionId, session.id), eq(schema.attendanceEvents.eventType, "CHECK_IN")),
       });
 
+      vi.setSystemTime(new Date("2026-02-28" + "T23:30:00Z")); // F-07-bump: a correction can only name a time that has already happened
       await expect(
         svc.requestCorrection(ctx, employeeGraceId, {
           workDate: "2026-02-28",
@@ -951,6 +952,7 @@ describe.skipIf(!available)("attendance service", () => {
         vi.setSystemTime(new Date("2026-03-10T18:00:00Z"));
         await svc.checkOut(ctx, employeeGraceId);
 
+        vi.setSystemTime(new Date("2026-03-10" + "T23:30:00Z")); // F-07-bump: a correction can only name a time that has already happened
         await expect(
           svc.requestCorrection(ctx, employeeGraceId, {
             workDate: "2026-03-10",
@@ -970,6 +972,7 @@ describe.skipIf(!available)("attendance service", () => {
           where: and(eq(schema.attendanceEvents.sessionId, session.id), eq(schema.attendanceEvents.eventType, "CHECK_IN")),
         });
 
+        vi.setSystemTime(new Date("2026-03-11" + "T23:30:00Z")); // F-07-bump: a correction can only name a time that has already happened
         await expect(
           svc.requestCorrection(ctx, employeeGraceId, {
             workDate: "2026-03-11",
@@ -991,6 +994,7 @@ describe.skipIf(!available)("attendance service", () => {
         vi.setSystemTime(new Date("2026-03-12T18:00:00Z"));
         await svc.checkOut(ctx, employeeGraceId);
 
+        vi.setSystemTime(new Date("2026-03-12" + "T23:30:00Z")); // F-07-bump: a correction can only name a time that has already happened
         await expect(
           svc.requestCorrection(ctx, employeeGraceId, {
             workDate: "2026-03-12",
@@ -1001,6 +1005,7 @@ describe.skipIf(!available)("attendance service", () => {
           }),
         ).rejects.toThrow(errors.InvalidCorrectionTargetError);
 
+        vi.setSystemTime(new Date("2026-03-12" + "T23:30:00Z")); // F-07-bump: a correction can only name a time that has already happened
         await expect(
           svc.requestCorrection(ctx, employeeGraceId, {
             workDate: "2026-03-12",
@@ -1025,6 +1030,7 @@ describe.skipIf(!available)("attendance service", () => {
         const before = await svc.getAttendanceDay(ctx, employeeGraceId, "2026-03-13");
         expect(before.record.breakMinutes).toBe(30);
 
+        vi.setSystemTime(new Date("2026-03-13" + "T23:30:00Z")); // F-07-bump: a correction can only name a time that has already happened
         const correction = await svc.requestCorrection(ctx, employeeGraceId, {
           workDate: "2026-03-13",
           fieldChanged: "BREAK_START",
@@ -1048,6 +1054,7 @@ describe.skipIf(!available)("attendance service", () => {
       const before = await svc.getAttendanceDay(ctx, employeeGraceId, "2026-03-15");
       expect(before.record.status).toBe("INCOMPLETE");
 
+      vi.setSystemTime(new Date("2026-03-15" + "T23:30:00Z")); // F-07-bump: a correction can only name a time that has already happened
       const correction = await svc.requestCorrection(ctx, employeeGraceId, {
         workDate: "2026-03-15",
         fieldChanged: "CHECK_OUT",
@@ -1076,6 +1083,7 @@ describe.skipIf(!available)("attendance service", () => {
       vi.setSystemTime(new Date("2026-03-16T09:00:00Z"));
       await svc.checkIn(ctx, employeeGraceId);
 
+      vi.setSystemTime(new Date("2026-03-16" + "T23:30:00Z")); // F-07-bump: a correction can only name a time that has already happened
       const correction = await svc.requestCorrection(ctx, employeeGraceId, {
         workDate: "2026-03-16",
         fieldChanged: "CHECK_OUT",
@@ -1118,6 +1126,7 @@ describe.skipIf(!available)("attendance service", () => {
       vi.setSystemTime(new Date("2026-03-18T09:00:00Z"));
       await svc.checkIn(ctx, employeeGraceId);
       // Forgot to check out — exactly one open session exists right now, so this is a valid target.
+      vi.setSystemTime(new Date("2026-03-18" + "T23:30:00Z")); // F-07-bump: a correction can only name a time that has already happened
       const correction = await svc.requestCorrection(ctx, employeeGraceId, {
         workDate: "2026-03-18",
         fieldChanged: "CHECK_OUT",
@@ -1629,6 +1638,7 @@ describe.skipIf(!available)("attendance service", () => {
       await svc.checkIn(ctx, id); // forgot to check out
       expect(await storedRecord(id, D)).toBeUndefined();
 
+      at(`${D}T23:30:00Z`); // a corrected time must already have happened
       const correction = await svc.requestCorrection(ctx, id, {
         workDate: D,
         fieldChanged: "CHECK_OUT",
@@ -1703,6 +1713,540 @@ describe.skipIf(!available)("attendance service", () => {
       expect(row?.status).toBe("PRESENT"); // not overwritten by a GET's stale ABSENT
       expect(row?.sessionCount).toBe(1);
       expect(row?.workedMinutes).toBe(540);
+    });
+  });
+
+  // F-05 - a session must never be left stranded in OPEN with no way out.
+  describe("stranded sessions (F-05)", () => {
+    let scheduleId: string;
+    let seq = 0;
+    let periodSvc: typeof import("../periods/attendance-period.service");
+
+    beforeAll(async () => {
+      periodSvc = await import("../periods/attendance-period.service");
+      const schedule = await workforceSvc.createWorkSchedule(ctx, { name: `AttStranded-${Date.now()}`, startTime: "09:00:00", endTime: "18:00:00" });
+      scheduleId = schedule.id;
+    });
+
+    async function newScheduledEmployee() {
+      seq += 1;
+      const employee = await employeeService.createEmployee(ctx, {
+        firstName: "Stranded",
+        lastName: `E${seq}-${Date.now()}`,
+        workEmail: `att-stranded-${seq}-${Date.now()}@test.local`,
+        dateOfJoining: "2020-01-01",
+        locationId: branchId,
+      });
+      await workforceSvc.assignEmployeeSchedule(ctx, employee.id, { workScheduleId: scheduleId, effectiveFrom: ASSIGNMENT_START });
+      return employee.id;
+    }
+
+    const at = (iso: string) => vi.setSystemTime(new Date(iso));
+    const sessionsOf = (employeeId: string) =>
+      db.query.attendanceOpenSessions.findMany({ where: eq(schema.attendanceOpenSessions.employeeId, employeeId), orderBy: (t, { asc }) => [asc(t.checkInAt)] });
+    const abandonAudits = async (sessionId: string) =>
+      (await db.query.auditLogs.findMany({ where: eq(schema.auditLogs.entityId, sessionId) })).filter((l) => l.action === "attendance.session.abandon");
+
+    it("an approved missing-check-out correction closes the OPEN session: period can close, recalculation stays valid, and the employee can check in again", async () => {
+      const id = await newScheduledEmployee();
+      const D = "2026-11-03";
+
+      at(`${D}T09:00:00Z`);
+      const open = await svc.checkIn(ctx, id); // forgets to check out
+      at(`${D}T23:30:00Z`);
+      const correction = await svc.requestCorrection(ctx, id, { workDate: D, fieldChanged: "CHECK_OUT", correctedValue: new Date(`${D}T18:00:00Z`), reason: "Forgot" });
+
+      // Still OPEN (and blocking the period) until the correction is approved.
+      await expect(periodSvc.closeAttendancePeriod(ctx, "2026-11")).rejects.toThrow();
+
+      await svc.approveCorrection(ctxReviewer, correction.id, { reviewNote: "ok" });
+
+      const [session] = await sessionsOf(id);
+      expect(session!.id).toBe(open.id);
+      expect(session!.status).toBe("CLOSED");
+      expect(session!.checkOutAt?.toISOString()).toBe(`${D}T18:00:00.000Z`);
+      // No synthetic CHECK_OUT event is fabricated; the correction row is the record.
+      const events = await db.query.attendanceEvents.findMany({ where: eq(schema.attendanceEvents.employeeId, id) });
+      expect(events.map((e) => e.eventType)).toEqual(["CHECK_IN"]);
+
+      expect((await svc.getCurrentSession(ctx, id)).session).toBeNull();
+      expect((await svc.recalculateDailyRecord(ctx, id, D)).workedMinutes).toBe(540); // still resolves the correction's target
+      const row = await db.query.attendanceDailyRecords.findFirst({ where: and(eq(schema.attendanceDailyRecords.employeeId, id), eq(schema.attendanceDailyRecords.workDate, D)) });
+      expect(row?.status).toBe("PRESENT");
+
+      // The employee is no longer locked out of the same work date.
+      at(`${D}T19:00:00Z`);
+      const second = await svc.checkIn(ctx, id);
+      expect(second.status).toBe("OPEN");
+      at(`${D}T20:00:00Z`);
+      await svc.checkOut(ctx, id);
+
+      // And the month is closable once nothing else is open in it (this test's employee only).
+      const preview = await periodSvc.previewAttendancePeriodClose(ctx, "2026-11");
+      expect(preview.openSessionCount).toBe(0);
+    });
+
+    it("an employee who has LEFT with a stranded session can be resolved by HR through the correction workflow", async () => {
+      const id = await newScheduledEmployee();
+      const D = "2026-11-04";
+
+      at(`${D}T09:00:00Z`);
+      await svc.checkIn(ctx, id);
+      await employeeService.changeEmployeeStatus(ctx, id, "TERMINATED");
+      await expect(svc.checkIn(ctx, id)).rejects.toThrow(); // cannot start a new session...
+
+      // ...and previously nothing could ever close the old one. HR requests, a different user approves.
+      at(`${D}T23:30:00Z`);
+      const correction = await svc.requestCorrection(ctxReviewer, id, { workDate: D, fieldChanged: "CHECK_OUT", correctedValue: new Date(`${D}T17:00:00Z`), reason: "Left; closing session" });
+      await svc.approveCorrection(ctx, correction.id, { reviewNote: "confirmed" });
+
+      const [session] = await sessionsOf(id);
+      expect(session!.status).toBe("CLOSED");
+      expect((await periodSvc.previewAttendancePeriodClose(ctx, "2026-11")).openSessionCount).toBe(0);
+    });
+
+    it("a previous-day OPEN session is abandoned exactly once by the next-day check-in, even with concurrent check-ins; only one OPEN session ever exists", async () => {
+      const id = await newScheduledEmployee();
+      const D1 = "2026-11-05";
+      const D2 = "2026-11-06";
+
+      at(`${D1}T09:00:00Z`);
+      const stale = await svc.checkIn(ctx, id);
+
+      at(`${D2}T09:00:00Z`);
+      const results = await Promise.allSettled([svc.checkIn(ctx, id), svc.checkIn(ctx, id), svc.checkIn(ctx, id)]);
+      expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+      for (const r of results.filter((r) => r.status === "rejected")) {
+        expect((r as PromiseRejectedResult).reason).toBeInstanceOf(errors.AlreadyCheckedInError);
+      }
+
+      const sessions = await sessionsOf(id);
+      expect(sessions).toHaveLength(2);
+      expect(sessions.filter((x) => x.status === "OPEN")).toHaveLength(1);
+      expect(sessions.find((x) => x.id === stale.id)?.status).toBe("ABANDONED");
+      expect(await abandonAudits(stale.id)).toHaveLength(1);
+
+      at(`${D2}T18:00:00Z`);
+      await svc.checkOut(ctx, id);
+    });
+
+    it("a check-in that fails part-way (daily-record refresh) leaves NO partial state: old session still OPEN, nothing created, no abandon audit - and the retry works", async () => {
+      const id = await newScheduledEmployee();
+      const D1 = "2026-11-09";
+      const D2 = "2026-11-10";
+      const repo = await import("../repository");
+
+      at(`${D1}T09:00:00Z`);
+      const stale = await svc.checkIn(ctx, id); // never checked out
+      at(`${D2}T08:00:00Z`);
+      await svc.recalculateDailyRecord(ctx, id, D2); // an existing row => the check-in must refresh it
+
+      at(`${D2}T09:00:00Z`);
+      const spy = vi.spyOn(repo.attendanceDailyRecordRepository, "upsert").mockRejectedValueOnce(new Error("simulated refresh failure"));
+      await expect(svc.checkIn(ctx, id)).rejects.toThrow("simulated refresh failure");
+      spy.mockRestore();
+
+      const afterFailure = await sessionsOf(id);
+      expect(afterFailure).toHaveLength(1);
+      expect(afterFailure[0]!.id).toBe(stale.id);
+      expect(afterFailure[0]!.status).toBe("OPEN"); // NOT abandoned: the abandon rolled back with the transaction
+      expect(await abandonAudits(stale.id)).toHaveLength(0);
+      const events = await db.query.attendanceEvents.findMany({ where: eq(schema.attendanceEvents.employeeId, id) });
+      expect(events).toHaveLength(1);
+
+      const retry = await svc.checkIn(ctx, id);
+      expect(retry.status).toBe("OPEN");
+      const afterRetry = await sessionsOf(id);
+      expect(afterRetry.map((x) => x.status)).toEqual(["ABANDONED", "OPEN"]);
+      expect(await abandonAudits(stale.id)).toHaveLength(1);
+
+      at(`${D2}T18:00:00Z`);
+      await svc.checkOut(ctx, id);
+    });
+
+    it("an abandoned previous-month session no longer blocks that month's period close", async () => {
+      const id = await newScheduledEmployee();
+      at("2026-12-31T09:00:00Z");
+      await svc.checkIn(ctx, id);
+      expect((await periodSvc.previewAttendancePeriodClose(ctx, "2026-12")).openSessionCount).toBeGreaterThanOrEqual(1);
+
+      at("2027-01-04T09:00:00Z");
+      await svc.checkIn(ctx, id); // abandons the Dec-31 session
+      const dec = await db.query.attendanceOpenSessions.findMany({
+        where: and(eq(schema.attendanceOpenSessions.employeeId, id), eq(schema.attendanceOpenSessions.workDate, "2026-12-31")),
+      });
+      expect(dec[0]!.status).toBe("ABANDONED");
+      at("2027-01-04T18:00:00Z");
+      await svc.checkOut(ctx, id);
+    });
+  });
+
+  // F-07 - the server decides what "today" is (in the employee's own timezone); future attendance is never
+  // written, and historical HR operations keep working.
+  describe("date boundaries (F-07)", () => {
+    let scheduleId: string;
+    let auckland: string; // branch id
+    let seq = 0;
+
+    beforeAll(async () => {
+      const schedule = await workforceSvc.createWorkSchedule(ctx, { name: `AttDates-${Date.now()}`, startTime: "09:00:00", endTime: "18:00:00" });
+      scheduleId = schedule.id;
+      const [branch] = await db
+        .insert(schema.branches)
+        .values({ companyId: companyAId, name: "Auckland", code: `ATT_AKL_${Date.now()}`, timezone: "Pacific/Auckland" })
+        .returning();
+      auckland = branch!.id;
+    });
+
+    async function newEmployee(overrides: { locationId?: string; dateOfJoining?: string } = {}) {
+      seq += 1;
+      const employee = await employeeService.createEmployee(ctx, {
+        firstName: "Dates",
+        lastName: `E${seq}-${Date.now()}`,
+        workEmail: `att-dates-${seq}-${Date.now()}@test.local`,
+        dateOfJoining: overrides.dateOfJoining ?? "2020-01-01",
+        locationId: overrides.locationId ?? branchId,
+      });
+      await workforceSvc.assignEmployeeSchedule(ctx, employee.id, { workScheduleId: scheduleId, effectiveFrom: ASSIGNMENT_START });
+      return employee.id;
+    }
+
+    const at = (iso: string) => vi.setSystemTime(new Date(iso));
+    const recordCount = async (employeeId: string) =>
+      (await db.query.attendanceDailyRecords.findMany({ where: eq(schema.attendanceDailyRecords.employeeId, employeeId) })).length;
+    const correctionCount = async (employeeId: string) =>
+      (await db.query.attendanceCorrections.findMany({ where: eq(schema.attendanceCorrections.employeeId, employeeId) })).length;
+
+    it("today and yesterday can be recalculated (legitimate historical HR operations)", async () => {
+      const id = await newEmployee();
+      at("2026-07-21T10:00:00Z");
+      expect((await svc.recalculateDailyRecord(ctx, id, "2026-07-21")).workDate).toBe("2026-07-21"); // today
+      expect((await svc.recalculateDailyRecord(ctx, id, "2026-07-20")).workDate).toBe("2026-07-20"); // yesterday
+      expect((await svc.recalculateDailyRecord(ctx, id, "2025-01-06")).workDate).toBe("2025-01-06"); // long ago
+      expect(await recordCount(id)).toBe(3);
+    });
+
+    it("a future date is rejected by recalculation and Process Day, and nothing is persisted", async () => {
+      const id = await newEmployee();
+      const processing = await import("../processing/attendance-processing.service");
+      at("2026-07-21T10:00:00Z");
+
+      await expect(svc.recalculateDailyRecord(ctx, id, "2026-07-22")).rejects.toBeInstanceOf(errors.InvalidAttendanceDateError);
+      await expect(svc.recalculateDailyRecord(ctx, id, "2099-01-01")).rejects.toBeInstanceOf(errors.InvalidAttendanceDateError);
+      await expect(processing.processEmployeeAttendanceDay(ctx, { employeeId: id, workDate: "2026-07-22" })).rejects.toBeInstanceOf(errors.InvalidAttendanceDateError);
+      await expect(processing.processCompanyAttendanceDay(ctx, { workDate: "2026-07-22" })).rejects.toBeInstanceOf(errors.InvalidAttendanceDateError);
+
+      expect(await recordCount(id)).toBe(0);
+      const futureRows = await db.query.attendanceDailyRecords.findMany({
+        where: and(eq(schema.attendanceDailyRecords.companyId, companyAId), eq(schema.attendanceDailyRecords.workDate, "2026-07-22")),
+      });
+      expect(futureRows).toHaveLength(0); // Process Day wrote nothing for anyone in the company
+    });
+
+    it("a correction cannot name a future work date or a future time; a valid historical one is accepted", async () => {
+      const id = await newEmployee();
+      at("2026-07-21T12:00:00Z");
+
+      await expect(
+        svc.requestCorrection(ctx, id, { workDate: "2026-07-22", fieldChanged: "CHECK_IN", correctedValue: new Date("2026-07-22T09:00:00Z"), reason: "future day" }),
+      ).rejects.toBeInstanceOf(errors.InvalidAttendanceDateError);
+      await expect(
+        svc.requestCorrection(ctx, id, { workDate: "2026-07-21", fieldChanged: "CHECK_IN", correctedValue: new Date("2026-07-21T15:00:00Z"), reason: "later today" }),
+      ).rejects.toBeInstanceOf(errors.InvalidAttendanceDateError);
+      expect(await correctionCount(id)).toBe(0);
+
+      const ok = await svc.requestCorrection(ctx, id, { workDate: "2026-07-20", fieldChanged: "CHECK_IN", correctedValue: new Date("2026-07-20T09:10:00Z"), reason: "forgot yesterday" });
+      expect(ok.status).toBe("PENDING");
+      expect(await correctionCount(id)).toBe(1);
+    });
+
+    it("TIMEZONE BOUNDARY: 'today' is the employee's own local date - Auckland is already on the 22nd while UTC is still the 21st", async () => {
+      const utcEmployee = await newEmployee();
+      const aucklandEmployee = await newEmployee({ locationId: auckland });
+      at("2026-07-21T20:00:00Z"); // 08:00 on 22 July in Auckland (UTC+12)
+
+      expect((await svc.recalculateDailyRecord(ctx, aucklandEmployee, "2026-07-22")).workDate).toBe("2026-07-22");
+      await expect(svc.recalculateDailyRecord(ctx, utcEmployee, "2026-07-22")).rejects.toBeInstanceOf(errors.InvalidAttendanceDateError);
+      // The 23rd has not started anywhere in either timezone.
+      await expect(svc.recalculateDailyRecord(ctx, aucklandEmployee, "2026-07-23")).rejects.toBeInstanceOf(errors.InvalidAttendanceDateError);
+      await expect(svc.recalculateDailyRecord(ctx, utcEmployee, "2026-07-23")).rejects.toBeInstanceOf(errors.InvalidAttendanceDateError);
+    });
+
+    it("malformed and impossible dates are rejected at the service boundary too (never reach a query)", async () => {
+      const id = await newEmployee();
+      const processing = await import("../processing/attendance-processing.service");
+      at("2026-07-21T10:00:00Z");
+      for (const bad of ["2026-02-31", "2026-13-01", "9999-12-31", "07/21/2026", ""]) {
+        await expect(svc.recalculateDailyRecord(ctx, id, bad)).rejects.toBeInstanceOf(errors.InvalidAttendanceDateError);
+        await expect(svc.getAttendanceDay(ctx, id, bad)).rejects.toBeInstanceOf(errors.InvalidAttendanceDateError);
+        await expect(processing.processEmployeeAttendanceDay(ctx, { employeeId: id, workDate: bad })).rejects.toBeInstanceOf(errors.InvalidAttendanceDateError);
+      }
+      expect(await recordCount(id)).toBe(0);
+    });
+
+    it("a date before the employee joined cannot be calculated", async () => {
+      const id = await newEmployee({ dateOfJoining: "2026-07-01" });
+      at("2026-07-21T10:00:00Z");
+      await expect(svc.recalculateDailyRecord(ctx, id, "2026-06-30")).rejects.toBeInstanceOf(errors.InvalidAttendanceDateError);
+      expect((await svc.recalculateDailyRecord(ctx, id, "2026-07-01")).workDate).toBe("2026-07-01");
+    });
+
+    it("a client-supplied date/time on a punch is ignored: the server clock and the employee's timezone decide the work date", async () => {
+      const id = await newEmployee();
+      at("2026-07-21T09:00:00Z");
+      const smuggled = { workDate: "2099-01-01", occurredAt: "2099-01-01T09:00:00Z", checkInAt: new Date("2099-01-01T09:00:00Z") } as unknown as Parameters<typeof svc.checkIn>[2];
+      const session = await svc.checkIn(ctx, id, smuggled);
+      expect(session.workDate).toBe("2026-07-21");
+      expect(session.checkInAt.toISOString()).toBe("2026-07-21T09:00:00.000Z");
+      const future = await db.query.attendanceOpenSessions.findMany({
+        where: and(eq(schema.attendanceOpenSessions.employeeId, id), eq(schema.attendanceOpenSessions.workDate, "2099-01-01")),
+      });
+      expect(future).toHaveLength(0);
+      at("2026-07-21T18:00:00Z");
+      await svc.checkOut(ctx, id);
+    });
+  });
+
+  // F-09 / F-19 / F-20 - a retried or repeated request must never produce a second business effect.
+  describe("duplicate requests and idempotency (F-09, F-19, F-20)", () => {
+    let scheduleId: string;
+    let seq = 0;
+
+    beforeAll(async () => {
+      const schedule = await workforceSvc.createWorkSchedule(ctx, { name: `AttIdem-${Date.now()}`, startTime: "09:00:00", endTime: "18:00:00" });
+      scheduleId = schedule.id;
+    });
+
+    async function newScheduledEmployee() {
+      seq += 1;
+      const employee = await employeeService.createEmployee(ctx, {
+        firstName: "Idem",
+        lastName: `E${seq}-${Date.now()}`,
+        workEmail: `att-idem-${seq}-${Date.now()}@test.local`,
+        dateOfJoining: "2020-01-01",
+        locationId: branchId,
+      });
+      await workforceSvc.assignEmployeeSchedule(ctx, employee.id, { workScheduleId: scheduleId, effectiveFrom: ASSIGNMENT_START });
+      return employee.id;
+    }
+
+    const at = (iso: string) => vi.setSystemTime(new Date(iso));
+    const eventsOf = (employeeId: string) => db.query.attendanceEvents.findMany({ where: eq(schema.attendanceEvents.employeeId, employeeId), orderBy: (t, { asc }) => [asc(t.occurredAt)] });
+    const sessionsOf = (employeeId: string) => db.query.attendanceOpenSessions.findMany({ where: eq(schema.attendanceOpenSessions.employeeId, employeeId) });
+    const correctionsOf = (employeeId: string) => db.query.attendanceCorrections.findMany({ where: eq(schema.attendanceCorrections.employeeId, employeeId) });
+    const auditCount = async (action: string, entityId: string) =>
+      (await db.query.auditLogs.findMany({ where: eq(schema.auditLogs.entityId, entityId) })).filter((l) => l.action === action).length;
+
+    // ------------------------------------------------------------------ F-09 duplicate corrections
+    describe("duplicate corrections (F-09)", () => {
+      const request = (id: string, D: string, overrides: Partial<Parameters<typeof svc.requestCorrection>[2]> = {}, who = ctx) =>
+        svc.requestCorrection(who, id, { workDate: D, fieldChanged: "CHECK_IN", correctedValue: new Date(`${D}T09:10:00Z`), reason: "Forgot to check in", ...overrides });
+
+      it("the SAME request repeated (double-click / retry) returns the original: one row, one audit entry", async () => {
+        const id = await newScheduledEmployee();
+        const D = "2026-08-03";
+        at(`${D}T20:00:00Z`);
+
+        const first = await request(id, D);
+        const second = await request(id, D); // a retry of the identical request
+        expect(second.id).toBe(first.id);
+        expect(await correctionsOf(id)).toHaveLength(1);
+        expect(await auditCount("attendance.correction.create", first.id)).toBe(1);
+      });
+
+      it("concurrent identical requests produce exactly one correction (no double insert), and all callers get that one", async () => {
+        const id = await newScheduledEmployee();
+        const D = "2026-08-04";
+        at(`${D}T20:00:00Z`);
+
+        const results = await Promise.allSettled(Array.from({ length: 5 }, () => request(id, D)));
+        expect(results.every((r) => r.status === "fulfilled")).toBe(true);
+        const ids = new Set(results.map((r) => (r as PromiseFulfilledResult<{ id: string }>).value.id));
+        expect(ids.size).toBe(1);
+
+        const rows = await correctionsOf(id);
+        expect(rows).toHaveLength(1);
+        expect(await auditCount("attendance.correction.create", rows[0]!.id)).toBe(1);
+      });
+
+      it("concurrent requests with DIFFERENT values for the same target: exactly one wins, the other is a genuine conflict", async () => {
+        const id = await newScheduledEmployee();
+        const D = "2026-08-05";
+        at(`${D}T20:00:00Z`);
+
+        const results = await Promise.allSettled([
+          request(id, D, { correctedValue: new Date(`${D}T09:10:00Z`) }),
+          request(id, D, { correctedValue: new Date(`${D}T09:20:00Z`) }),
+        ]);
+        expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+        const rejected = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
+        expect(rejected.reason).toBeInstanceOf(errors.ConflictingCorrectionError);
+        expect(await correctionsOf(id)).toHaveLength(1);
+      });
+
+      it("a repeat from a DIFFERENT requester, or after the first was reviewed, is still a conflict (not silently merged)", async () => {
+        const id = await newScheduledEmployee();
+        const D = "2026-08-06";
+        at(`${D}T20:00:00Z`);
+
+        const first = await request(id, D);
+        await expect(request(id, D, {}, ctxReviewer)).rejects.toBeInstanceOf(errors.ConflictingCorrectionError); // other requester, same values
+        await svc.approveCorrection(ctxReviewer, first.id);
+        await expect(request(id, D)).rejects.toBeInstanceOf(errors.ConflictingCorrectionError); // already APPROVED
+        expect(await correctionsOf(id)).toHaveLength(1);
+      });
+
+      it("genuinely different corrections for the same employee and day remain possible (different field / event), and a rejected one can be re-requested", async () => {
+        const id = await newScheduledEmployee();
+        const D = "2026-08-07";
+        at(`${D}T09:20:00Z`);
+        await svc.checkIn(ctx, id);
+        at(`${D}T17:00:00Z`);
+        await svc.checkOut(ctx, id);
+        const events = await eventsOf(id);
+        const checkInEvent = events.find((e) => e.eventType === "CHECK_IN")!;
+        const checkOutEvent = events.find((e) => e.eventType === "CHECK_OUT")!;
+        at(`${D}T20:00:00Z`);
+
+        const a = await request(id, D, { eventId: checkInEvent.id, correctedValue: new Date(`${D}T09:00:00Z`), reason: "arrived earlier" });
+        const b = await request(id, D, { fieldChanged: "CHECK_OUT", eventId: checkOutEvent.id, correctedValue: new Date(`${D}T18:00:00Z`), reason: "left later" });
+        expect(a.id).not.toBe(b.id);
+        expect(await correctionsOf(id)).toHaveLength(2);
+
+        await svc.rejectCorrection(ctxReviewer, a.id, { reviewNote: "no" });
+        const again = await request(id, D, { eventId: checkInEvent.id, correctedValue: new Date(`${D}T09:05:00Z`), reason: "arrived earlier, corrected" });
+        expect(again.id).not.toBe(a.id);
+        expect(await correctionsOf(id)).toHaveLength(3);
+      });
+
+      it("a correction approval racing the employee's own check-out leaves one consistent outcome: session closed, record consistent, no deadlock", async () => {
+        const id = await newScheduledEmployee();
+        const D = "2026-08-10";
+        at(`${D}T09:00:00Z`);
+        await svc.checkIn(ctx, id);
+        at(`${D}T19:00:00Z`);
+        const correction = await request(id, D, { fieldChanged: "CHECK_OUT", correctedValue: new Date(`${D}T18:00:00Z`), reason: "forgot" });
+
+        const results = await Promise.allSettled([svc.approveCorrection(ctxReviewer, correction.id), svc.checkOut(ctx, id)]);
+        expect(results.filter((r) => r.status === "fulfilled").length).toBeGreaterThanOrEqual(1);
+
+        const [session] = await sessionsOf(id);
+        expect(session!.status).toBe("CLOSED");
+        const row = await db.query.attendanceDailyRecords.findFirst({ where: and(eq(schema.attendanceDailyRecords.employeeId, id), eq(schema.attendanceDailyRecords.workDate, D)) });
+        expect(row?.status).not.toBe("INCOMPLETE");
+        expect(row?.sessionCount).toBe(1);
+      });
+    });
+
+    // ------------------------------------------------------------------ F-19 / F-20 idempotency
+    describe("idempotency keys (F-19, F-20)", () => {
+      it("a retry with the same key returns the original session - one session, one event, one audit entry", async () => {
+        const id = await newScheduledEmployee();
+        const D = "2026-08-11";
+        const key = crypto.randomUUID();
+        at(`${D}T09:00:00Z`);
+
+        const first = await svc.checkIn(ctx, id, { idempotencyKey: key });
+        at(`${D}T09:00:05Z`);
+        const retry = await svc.checkIn(ctx, id, { idempotencyKey: key });
+        expect(retry.id).toBe(first.id);
+        expect(await sessionsOf(id)).toHaveLength(1);
+        expect((await eventsOf(id)).filter((e) => e.eventType === "CHECK_IN")).toHaveLength(1);
+        expect(await auditCount("attendance.check_in", first.id)).toBe(1);
+
+        // Even after the session is closed, the retry of the original request still resolves to it.
+        at(`${D}T18:00:00Z`);
+        await svc.checkOut(ctx, id);
+        expect((await svc.checkIn(ctx, id, { idempotencyKey: key })).id).toBe(first.id);
+        expect(await sessionsOf(id)).toHaveLength(1);
+      });
+
+      it("the same key cannot be reused for a materially different action: it is refused, nothing is written", async () => {
+        const id = await newScheduledEmployee();
+        const D = "2026-08-12";
+        const key = crypto.randomUUID();
+        at(`${D}T09:00:00Z`);
+        await svc.checkIn(ctx, id, { idempotencyKey: key });
+
+        at(`${D}T12:00:00Z`);
+        await expect(svc.checkOut(ctx, id, { idempotencyKey: key })).rejects.toBeInstanceOf(errors.IdempotencyKeyReuseError);
+        await expect(svc.startBreak(ctx, id, { idempotencyKey: key })).rejects.toBeInstanceOf(errors.IdempotencyKeyReuseError);
+
+        const [session] = await sessionsOf(id);
+        expect(session!.status).toBe("OPEN"); // the check-out did NOT happen, and was not mistaken for the check-in's replay
+        expect((await eventsOf(id)).map((e) => e.eventType)).toEqual(["CHECK_IN"]);
+
+        at(`${D}T18:00:00Z`);
+        await svc.checkOut(ctx, id, { idempotencyKey: crypto.randomUUID() }); // a fresh key works
+      });
+
+      it("concurrent requests with the same key: every caller gets the one original result (check-in and check-out)", async () => {
+        const id = await newScheduledEmployee();
+        const D = "2026-08-13";
+        const inKey = crypto.randomUUID();
+        const outKey = crypto.randomUUID();
+
+        at(`${D}T09:00:00Z`);
+        const ins = await Promise.allSettled([svc.checkIn(ctx, id, { idempotencyKey: inKey }), svc.checkIn(ctx, id, { idempotencyKey: inKey }), svc.checkIn(ctx, id, { idempotencyKey: inKey })]);
+        expect(ins.every((r) => r.status === "fulfilled")).toBe(true);
+        expect(new Set(ins.map((r) => (r as PromiseFulfilledResult<{ id: string }>).value.id)).size).toBe(1);
+        expect(await sessionsOf(id)).toHaveLength(1);
+        expect((await eventsOf(id)).filter((e) => e.eventType === "CHECK_IN")).toHaveLength(1);
+
+        at(`${D}T18:00:00Z`);
+        const outs = await Promise.allSettled([svc.checkOut(ctx, id, { idempotencyKey: outKey }), svc.checkOut(ctx, id, { idempotencyKey: outKey }), svc.checkOut(ctx, id, { idempotencyKey: outKey })]);
+        expect(outs.every((r) => r.status === "fulfilled")).toBe(true);
+        expect(new Set(outs.map((r) => (r as PromiseFulfilledResult<{ id: string }>).value.id)).size).toBe(1);
+        expect((await eventsOf(id)).filter((e) => e.eventType === "CHECK_OUT")).toHaveLength(1);
+        const [session] = await sessionsOf(id);
+        expect(session!.status).toBe("CLOSED");
+      });
+
+      it("break retries with the same key return the same event (one row each)", async () => {
+        const id = await newScheduledEmployee();
+        const D = "2026-08-14";
+        const startKey = crypto.randomUUID();
+        const endKey = crypto.randomUUID();
+        at(`${D}T09:00:00Z`);
+        await svc.checkIn(ctx, id);
+        at(`${D}T13:00:00Z`);
+        const results = await Promise.all([svc.startBreak(ctx, id, { idempotencyKey: startKey }), svc.startBreak(ctx, id, { idempotencyKey: startKey })]);
+        expect(results[0].id).toBe(results[1].id);
+        at(`${D}T13:30:00Z`);
+        const ends = await Promise.all([svc.endBreak(ctx, id, { idempotencyKey: endKey }), svc.endBreak(ctx, id, { idempotencyKey: endKey })]);
+        expect(ends[0].id).toBe(ends[1].id);
+        const types = (await eventsOf(id)).map((e) => e.eventType);
+        expect(types.filter((t) => t === "BREAK_START")).toHaveLength(1);
+        expect(types.filter((t) => t === "BREAK_END")).toHaveLength(1);
+        at(`${D}T18:00:00Z`);
+        await svc.checkOut(ctx, id);
+      });
+
+      it("a failed transaction leaves no key behind: the retry with the same key succeeds", async () => {
+        const id = await newScheduledEmployee();
+        const D = "2026-08-17";
+        const key = crypto.randomUUID();
+        const repo = await import("../repository");
+        at(`${D}T09:00:00Z`);
+        await svc.checkIn(ctx, id);
+        at(`${D}T18:00:00Z`);
+
+        const spy = vi.spyOn(repo.attendanceDailyRecordRepository, "upsert").mockRejectedValueOnce(new Error("simulated failure"));
+        await expect(svc.checkOut(ctx, id, { idempotencyKey: key })).rejects.toThrow("simulated failure");
+        spy.mockRestore();
+
+        expect((await eventsOf(id)).filter((e) => e.idempotencyKey === key)).toHaveLength(0); // the failed attempt consumed nothing
+        const closed = await svc.checkOut(ctx, id, { idempotencyKey: key });
+        expect(closed.status).toBe("CLOSED");
+        expect((await eventsOf(id)).filter((e) => e.idempotencyKey === key)).toHaveLength(1);
+      });
+
+      it("F-19: a punch refuses oversized client metadata (sourceMetadata) instead of storing it", async () => {
+        const { attendanceActionSchema, SOURCE_METADATA_MAX_BYTES } = await import("@/validations/attendance");
+        expect(attendanceActionSchema.safeParse({ sourceMetadata: { device: "web", note: "ok" } }).success).toBe(true);
+        expect(attendanceActionSchema.safeParse({ sourceMetadata: { blob: "x".repeat(SOURCE_METADATA_MAX_BYTES) } }).success).toBe(false);
+        expect(attendanceActionSchema.safeParse({}).success).toBe(true);
+      });
     });
   });
 

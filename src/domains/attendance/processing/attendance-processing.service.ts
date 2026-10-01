@@ -35,7 +35,8 @@ import { recordAuditLog } from "@/domains/audit/service";
 import { employeeRepository } from "@/domains/employee/repository";
 import { EmployeeNotFoundError } from "@/domains/employee/errors";
 import { attendanceDailyStatusEnum } from "@/db/schema";
-import { recalculateDailyRecord } from "../service";
+import { assertValidWorkDate, assertWorkDateNotInFuture, recalculateDailyRecord } from "../service";
+import { getMyCompany } from "@/domains/organization/service";
 import { attendanceDailyRecordRepository } from "../repository";
 import { AttendancePeriodLockedError, EmployeeNotEligibleForProcessingError } from "../errors";
 import { isAttendancePeriodClosed } from "../periods/attendance-period.service";
@@ -81,6 +82,7 @@ export async function processEmployeeAttendanceDay(
   input: { employeeId: string; workDate: string },
 ): Promise<ProcessEmployeeDayResult> {
   requirePermission(ctx, "attendance.recalculate");
+  assertValidWorkDate(input.workDate); // F-07: real date (the future check runs per employee timezone in recalculateDailyRecord)
   await assertEligible(ctx, input.employeeId, input.workDate);
 
   // Read-before-write purely to report `created` vs `updated` in the result — informational
@@ -116,6 +118,10 @@ export type ProcessCompanyDayResult = {
  */
 export async function processCompanyAttendanceDay(ctx: RequestContext, input: { workDate: string }): Promise<ProcessCompanyDayResult> {
   requirePermission(ctx, "attendance.recalculate");
+
+  // F-07 - a work date that has not happened in the company's timezone is never processed (a past or
+  // current date is; the same rule is applied per employee timezone inside each recalculation).
+  assertWorkDateNotInFuture(input.workDate, (await getMyCompany(ctx)).timezone);
 
   // Batch 8 (§14) — a fast, non-locking upfront rejection so a closed period fails once, clearly,
   // instead of looping over every eligible employee only to have each one's own

@@ -154,20 +154,20 @@ describe.skipIf(!available)("attendance period service (Batch 8)", () => {
 
   describe("listAttendancePeriods / getAttendancePeriod", () => {
     it("synthesizes a virtual OPEN entry for a month never touched — absence of a row means OPEN, not a fabricated status", async () => {
-      const view = await periodSvc.getAttendancePeriod(ctx, "2031-01");
-      expect(view).toEqual({ periodMonth: "2031-01", status: "OPEN", closedAt: null, closedByName: null });
+      const view = await periodSvc.getAttendancePeriod(ctx, "2025-01");
+      expect(view).toEqual({ periodMonth: "2025-01", status: "OPEN", closedAt: null, closedByName: null });
 
       const rows = await db.query.attendancePeriods.findFirst({
-        where: (t, { and: dbAnd, eq: dbEq }) => dbAnd(dbEq(t.companyId, companyAId), dbEq(t.periodMonth, "2031-01")),
+        where: (t, { and: dbAnd, eq: dbEq }) => dbAnd(dbEq(t.companyId, companyAId), dbEq(t.periodMonth, "2025-01")),
       });
       expect(rows).toBeUndefined();
     });
 
     it("viewing periods requires attendance.period.lock or .unlock; MANAGER/EMPLOYEE are rejected", async () => {
-      await expect(periodSvc.getAttendancePeriod(ctx, "2031-01")).resolves.toBeDefined();
-      await expect(periodSvc.getAttendancePeriod(ctxHrAdmin, "2031-01")).resolves.toBeDefined();
-      await expect(periodSvc.getAttendancePeriod(ctxManager, "2031-01")).rejects.toThrow(AuthorizationError);
-      await expect(periodSvc.getAttendancePeriod(ctxEmployee, "2031-01")).rejects.toThrow(AuthorizationError);
+      await expect(periodSvc.getAttendancePeriod(ctx, "2025-01")).resolves.toBeDefined();
+      await expect(periodSvc.getAttendancePeriod(ctxHrAdmin, "2025-01")).resolves.toBeDefined();
+      await expect(periodSvc.getAttendancePeriod(ctxManager, "2025-01")).rejects.toThrow(AuthorizationError);
+      await expect(periodSvc.getAttendancePeriod(ctxEmployee, "2025-01")).rejects.toThrow(AuthorizationError);
     });
 
     it("listAttendancePeriods returns the current month plus monthsBack, newest first isn't required but every requested month is present exactly once", async () => {
@@ -182,7 +182,7 @@ describe.skipIf(!available)("attendance period service (Batch 8)", () => {
   });
 
   describe("close / reopen lifecycle", () => {
-    const MONTH = "2031-02";
+    const MONTH = "2025-02";
 
     it("closes an open (virtual) period, recording closedAt/closedByUserId", async () => {
       const closed = await periodSvc.closeAttendancePeriod(ctx, MONTH);
@@ -202,7 +202,7 @@ describe.skipIf(!available)("attendance period service (Batch 8)", () => {
     });
 
     it("rejects reopening an already-open period", async () => {
-      await expect(periodSvc.reopenAttendancePeriod(ctx, "2031-03")).rejects.toThrow(periodErrors.AttendancePeriodAlreadyOpenError);
+      await expect(periodSvc.reopenAttendancePeriod(ctx, "2025-03")).rejects.toThrow(periodErrors.AttendancePeriodAlreadyOpenError);
     });
 
     it("reopens a closed period, clearing closedAt/closedByUserId", async () => {
@@ -220,7 +220,7 @@ describe.skipIf(!available)("attendance period service (Batch 8)", () => {
 
   describe("open sessions block closing (never a fabricated checkout, never auto-abandon)", () => {
     it("rejects closing while an open session exists in the period, then succeeds once it's legitimately resolved", async () => {
-      const MONTH = "2031-04";
+      const MONTH = "2025-04";
       const workDate = `${MONTH}-15T09:00:00Z`;
       const employee = await newEmployee();
 
@@ -245,7 +245,7 @@ describe.skipIf(!available)("attendance period service (Batch 8)", () => {
   });
 
   describe("mutation enforcement for a closed period", () => {
-    const MONTH = "2031-05";
+    const MONTH = "2025-05";
     const WORK_DATE = `${MONTH}-10`;
 
     beforeAll(async () => {
@@ -303,7 +303,7 @@ describe.skipIf(!available)("attendance period service (Batch 8)", () => {
     });
 
     it("rejects approving/rejecting a still-PENDING correction once its period is closed after the request was made", async () => {
-      const openMonth = "2031-06";
+      const openMonth = "2025-06";
       const openWorkDate = `${openMonth}-10`;
       const employee = await newEmployee();
 
@@ -337,30 +337,30 @@ describe.skipIf(!available)("attendance period service (Batch 8)", () => {
     it("an overnight session's period lock follows the session's own workDate (shift-start day), not the checkout's later calendar date", async () => {
       const septEmployee = await newEmployee(ctx, true);
 
-      // Check in 2031-09-30 22:00 UTC (overnight shift) — session.workDate resolves to "2031-09-30".
-      vi.setSystemTime(new Date("2031-09-30T22:00:00Z"));
+      // Check in 2025-09-30 22:00 UTC (overnight shift) — session.workDate resolves to "2025-09-30".
+      vi.setSystemTime(new Date("2025-09-30T22:00:00Z"));
       await attendanceSvc.checkIn(ctx, septEmployee.id);
 
       // Close OCTOBER up front — this must have no bearing on the still-open September session.
-      await periodSvc.closeAttendancePeriod(ctx, "2031-10");
+      await periodSvc.closeAttendancePeriod(ctx, "2025-10");
 
       // The checkout physically happens on the October calendar date, but the session's workDate
       // is September, and September is still OPEN — so this must succeed, not be rejected for
       // October being closed.
-      vi.setSystemTime(new Date("2031-10-01T06:00:00Z"));
+      vi.setSystemTime(new Date("2025-10-01T06:00:00Z"));
       const closedSession = await attendanceSvc.checkOut(ctx, septEmployee.id);
-      expect(closedSession.workDate).toBe("2031-09-30");
+      expect(closedSession.workDate).toBe("2025-09-30");
 
       // September itself, meanwhile, still correctly blocks closing until now, and closes cleanly
       // once the (September-dated) session is resolved.
-      const closedSeptember = await periodSvc.closeAttendancePeriod(ctx, "2031-09");
+      const closedSeptember = await periodSvc.closeAttendancePeriod(ctx, "2025-09");
       expect(closedSeptember.status).toBe("CLOSED");
     });
   });
 
   describe("tenant isolation", () => {
     it("period status is scoped per company; closing company A's period never touches company B's, and company B cannot read or close company A's period by month alone", async () => {
-      const MONTH = "2031-11";
+      const MONTH = "2025-11";
       await periodSvc.closeAttendancePeriod(ctx, MONTH);
 
       const companyBView = await periodSvc.getAttendancePeriod(ctxCompanyB, MONTH);
@@ -384,14 +384,14 @@ describe.skipIf(!available)("attendance period service (Batch 8)", () => {
 
   describe("RBAC", () => {
     it("HR_ADMIN can close but not reopen; COMPANY_ADMIN can do both; HR_MANAGER/MANAGER/EMPLOYEE can do neither", async () => {
-      const closeOnlyMonth = "2031-12";
+      const closeOnlyMonth = "2025-12";
       const closed = await periodSvc.closeAttendancePeriod(ctxHrAdmin, closeOnlyMonth);
       expect(closed.status).toBe("CLOSED");
       await expect(periodSvc.reopenAttendancePeriod(ctxHrAdmin, closeOnlyMonth)).rejects.toThrow(AuthorizationError);
 
-      await expect(periodSvc.closeAttendancePeriod(ctxHrManager, "2032-01")).rejects.toThrow(AuthorizationError);
-      await expect(periodSvc.closeAttendancePeriod(ctxManager, "2032-01")).rejects.toThrow(AuthorizationError);
-      await expect(periodSvc.closeAttendancePeriod(ctxEmployee, "2032-01")).rejects.toThrow(AuthorizationError);
+      await expect(periodSvc.closeAttendancePeriod(ctxHrManager, "2024-01")).rejects.toThrow(AuthorizationError);
+      await expect(periodSvc.closeAttendancePeriod(ctxManager, "2024-01")).rejects.toThrow(AuthorizationError);
+      await expect(periodSvc.closeAttendancePeriod(ctxEmployee, "2024-01")).rejects.toThrow(AuthorizationError);
 
       const reopened = await periodSvc.reopenAttendancePeriod(ctx, closeOnlyMonth);
       expect(reopened.status).toBe("OPEN");
@@ -400,7 +400,7 @@ describe.skipIf(!available)("attendance period service (Batch 8)", () => {
 
   describe("audit logging", () => {
     it("records an audit log entry for close and for reopen", async () => {
-      const MONTH = "2032-02";
+      const MONTH = "2024-02";
       const closed = await periodSvc.closeAttendancePeriod(ctx, MONTH);
       const reopened = await periodSvc.reopenAttendancePeriod(ctx, MONTH);
 
@@ -420,7 +420,7 @@ describe.skipIf(!available)("attendance period service (Batch 8)", () => {
 
   describe("reads remain fully available on a closed period", () => {
     it("getAttendanceDay and getAttendanceCalendar keep working for a closed month", async () => {
-      const MONTH = "2032-03";
+      const MONTH = "2024-03";
       const WORK_DATE = `${MONTH}-05`;
       const employee = await newEmployee();
       await periodSvc.closeAttendancePeriod(ctx, MONTH);

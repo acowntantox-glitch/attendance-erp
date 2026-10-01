@@ -138,7 +138,7 @@ describe.skipIf(!available)("attendance exception service", () => {
 
   describe("detection", () => {
     it("1. LATE", async () => {
-      const MONTH = "2034-01";
+      const MONTH = "2023-01";
       const WORK_DATE = `${MONTH}-05`;
       const employee = await newEmployee();
       await insertRecord({ employeeId: employee.id, workDate: WORK_DATE, status: "LATE", lateMinutes: 24 });
@@ -152,7 +152,7 @@ describe.skipIf(!available)("attendance exception service", () => {
     });
 
     it("2. INCOMPLETE", async () => {
-      const MONTH = "2034-01";
+      const MONTH = "2023-01";
       const WORK_DATE = `${MONTH}-06`;
       const employee = await newEmployee();
       await insertRecord({ employeeId: employee.id, workDate: WORK_DATE, status: "INCOMPLETE" });
@@ -162,7 +162,7 @@ describe.skipIf(!available)("attendance exception service", () => {
     });
 
     it("3. ABSENT", async () => {
-      const MONTH = "2034-01";
+      const MONTH = "2023-01";
       const WORK_DATE = `${MONTH}-07`;
       const employee = await newEmployee();
       await insertRecord({ employeeId: employee.id, workDate: WORK_DATE, status: "ABSENT", workedMinutes: 0 });
@@ -172,7 +172,7 @@ describe.skipIf(!available)("attendance exception service", () => {
     });
 
     it("4. EARLY_DEPARTURE (status PRESENT but left early)", async () => {
-      const MONTH = "2034-01";
+      const MONTH = "2023-01";
       const WORK_DATE = `${MONTH}-08`;
       const employee = await newEmployee();
       await insertRecord({ employeeId: employee.id, workDate: WORK_DATE, status: "PRESENT", workedMinutes: 360, earlyDepartureMinutes: 120 });
@@ -185,7 +185,7 @@ describe.skipIf(!available)("attendance exception service", () => {
     });
 
     it("a PRESENT day with zero early departure is never an exception", async () => {
-      const WORK_DATE = "2034-01-09";
+      const WORK_DATE = "2023-01-09";
       const employee = await newEmployee();
       await insertRecord({ employeeId: employee.id, workDate: WORK_DATE, status: "PRESENT", workedMinutes: 480, earlyDepartureMinutes: 0 });
 
@@ -194,7 +194,7 @@ describe.skipIf(!available)("attendance exception service", () => {
     });
 
     it("5. multiple exception types filter (LATE + ABSENT only, excludes INCOMPLETE)", async () => {
-      const MONTH = "2034-02";
+      const MONTH = "2023-02";
       const lateEmp = await newEmployee();
       const absentEmp = await newEmployee();
       const incompleteEmp = await newEmployee();
@@ -214,7 +214,7 @@ describe.skipIf(!available)("attendance exception service", () => {
     });
 
     it("6. multiple employees on the same date all appear", async () => {
-      const WORK_DATE = "2034-02-10";
+      const WORK_DATE = "2023-02-10";
       const empA = await newEmployee();
       const empB = await newEmployee();
       await insertRecord({ employeeId: empA.id, workDate: WORK_DATE, status: "LATE", lateMinutes: 5 });
@@ -228,16 +228,16 @@ describe.skipIf(!available)("attendance exception service", () => {
 
     it("7. date range excludes rows outside it", async () => {
       const employee = await newEmployee();
-      await insertRecord({ employeeId: employee.id, workDate: "2034-03-01", status: "ABSENT" });
-      await insertRecord({ employeeId: employee.id, workDate: "2034-03-15", status: "ABSENT" });
+      await insertRecord({ employeeId: employee.id, workDate: "2023-03-01", status: "ABSENT" });
+      await insertRecord({ employeeId: employee.id, workDate: "2023-03-15", status: "ABSENT" });
 
-      const result = await exceptionSvc.listAttendanceExceptions(ctx, { fromDate: "2034-03-01", toDate: "2034-03-05" }, { page: 1, pageSize: 25 });
+      const result = await exceptionSvc.listAttendanceExceptions(ctx, { fromDate: "2023-03-01", toDate: "2023-03-05" }, { page: 1, pageSize: 25 });
       const dates = result.items.filter((r) => r.employeeId === employee.id).map((r) => r.workDate);
-      expect(dates).toEqual(["2034-03-01"]);
+      expect(dates).toEqual(["2023-03-01"]);
     });
 
     it("8. department filter", async () => {
-      const WORK_DATE = "2034-03-20";
+      const WORK_DATE = "2023-03-20";
       const engEmp = await newEmployee({ departmentId: deptEngId });
       const salesEmp = await newEmployee({ departmentId: deptSalesId });
       await insertRecord({ employeeId: engEmp.id, workDate: WORK_DATE, status: "ABSENT" });
@@ -250,7 +250,7 @@ describe.skipIf(!available)("attendance exception service", () => {
     });
 
     it("9. location filter", async () => {
-      const WORK_DATE = "2034-03-21";
+      const WORK_DATE = "2023-03-21";
       const [otherBranch] = await db.insert(schema.branches).values({ companyId: companyAId, name: "Exc Other", code: `EXC_OTHER_${Date.now()}`, timezone: "UTC" }).returning();
       const empHQ = await newEmployee({ locationId: branchAId });
       const empOther = await newEmployee({ locationId: otherBranch!.id });
@@ -264,7 +264,7 @@ describe.skipIf(!available)("attendance exception service", () => {
     });
 
     it("10. employee search (by employee number)", async () => {
-      const WORK_DATE = "2034-03-22";
+      const WORK_DATE = "2023-03-22";
       const employee = await newEmployee();
       await insertRecord({ employeeId: employee.id, workDate: WORK_DATE, status: "ABSENT" });
 
@@ -277,7 +277,7 @@ describe.skipIf(!available)("attendance exception service", () => {
     });
 
     it("11. pagination", async () => {
-      const MONTH = "2034-04";
+      const MONTH = "2023-04";
       const employees = await Promise.all(Array.from({ length: 5 }, () => newEmployee()));
       await Promise.all(employees.map((e, i) => insertRecord({ employeeId: e.id, workDate: `${MONTH}-${String(i + 1).padStart(2, "0")}`, status: "ABSENT" })));
 
@@ -290,7 +290,7 @@ describe.skipIf(!available)("attendance exception service", () => {
     });
 
     it("12. deterministic ordering (workDate DESC, name ASC)", async () => {
-      const MONTH = "2034-05";
+      const MONTH = "2023-05";
       const empA = await newEmployee();
       const empB = await newEmployee();
       await insertRecord({ employeeId: empA.id, workDate: `${MONTH}-01`, status: "ABSENT" });
@@ -306,7 +306,7 @@ describe.skipIf(!available)("attendance exception service", () => {
 
   describe("dismissal", () => {
     it("13. dismiss", async () => {
-      const WORK_DATE = "2034-06-01";
+      const WORK_DATE = "2023-06-01";
       const employee = await newEmployee();
       await insertRecord({ employeeId: employee.id, workDate: WORK_DATE, status: "LATE", lateMinutes: 15 });
 
@@ -316,7 +316,7 @@ describe.skipIf(!available)("attendance exception service", () => {
     });
 
     it("14. dismiss with note", async () => {
-      const WORK_DATE = "2034-06-02";
+      const WORK_DATE = "2023-06-02";
       const employee = await newEmployee();
       await insertRecord({ employeeId: employee.id, workDate: WORK_DATE, status: "ABSENT" });
 
@@ -325,7 +325,7 @@ describe.skipIf(!available)("attendance exception service", () => {
     });
 
     it("15. idempotent dismiss — repeated dismiss never creates a duplicate row", async () => {
-      const WORK_DATE = "2034-06-03";
+      const WORK_DATE = "2023-06-03";
       const employee = await newEmployee();
       await insertRecord({ employeeId: employee.id, workDate: WORK_DATE, status: "ABSENT" });
 
@@ -340,7 +340,7 @@ describe.skipIf(!available)("attendance exception service", () => {
     });
 
     it("16. undismiss removes dismissal metadata", async () => {
-      const WORK_DATE = "2034-06-04";
+      const WORK_DATE = "2023-06-04";
       const employee = await newEmployee();
       await insertRecord({ employeeId: employee.id, workDate: WORK_DATE, status: "ABSENT" });
       await exceptionSvc.dismissException(ctx, { employeeId: employee.id, workDate: WORK_DATE, exceptionType: "ABSENT" });
@@ -357,7 +357,7 @@ describe.skipIf(!available)("attendance exception service", () => {
     });
 
     it("17. dismissed rows are excluded from the default (hide-dismissed) list", async () => {
-      const WORK_DATE = "2034-06-05";
+      const WORK_DATE = "2023-06-05";
       const employee = await newEmployee();
       await insertRecord({ employeeId: employee.id, workDate: WORK_DATE, status: "ABSENT" });
 
@@ -371,7 +371,7 @@ describe.skipIf(!available)("attendance exception service", () => {
     });
 
     it("18. show-dismissed reveals the row again, with dismissal detail attached", async () => {
-      const WORK_DATE = "2034-06-06";
+      const WORK_DATE = "2023-06-06";
       const employee = await newEmployee();
       await insertRecord({ employeeId: employee.id, workDate: WORK_DATE, status: "ABSENT" });
       await exceptionSvc.dismissException(ctx, { employeeId: employee.id, workDate: WORK_DATE, exceptionType: "ABSENT", note: "handled" });
@@ -383,7 +383,7 @@ describe.skipIf(!available)("attendance exception service", () => {
     });
 
     it("19. dismiss and undismiss are audited", async () => {
-      const WORK_DATE = "2034-06-07";
+      const WORK_DATE = "2023-06-07";
       const employee = await newEmployee();
       await insertRecord({ employeeId: employee.id, workDate: WORK_DATE, status: "ABSENT" });
 
@@ -404,14 +404,14 @@ describe.skipIf(!available)("attendance exception service", () => {
     it("dismissing a combination that is not currently a live exception is rejected", async () => {
       const employee = await newEmployee();
       await expect(
-        exceptionSvc.dismissException(ctx, { employeeId: employee.id, workDate: "2034-06-08", exceptionType: "LATE" }),
+        exceptionSvc.dismissException(ctx, { employeeId: employee.id, workDate: "2023-06-08", exceptionType: "LATE" }),
       ).rejects.toThrow(errors.AttendanceExceptionNotFoundError);
     });
   });
 
   describe("security", () => {
     it("20/21. HR_ADMIN and HR_MANAGER can view and dismiss", async () => {
-      const WORK_DATE = "2034-07-01";
+      const WORK_DATE = "2023-07-01";
       const employee = await newEmployee();
       await insertRecord({ employeeId: employee.id, workDate: WORK_DATE, status: "ABSENT" });
 
@@ -423,7 +423,7 @@ describe.skipIf(!available)("attendance exception service", () => {
     });
 
     it("22. MANAGER is denied both view and dismiss", async () => {
-      const WORK_DATE = "2034-07-02";
+      const WORK_DATE = "2023-07-02";
       const employee = await newEmployee();
       await insertRecord({ employeeId: employee.id, workDate: WORK_DATE, status: "ABSENT" });
 
@@ -432,7 +432,7 @@ describe.skipIf(!available)("attendance exception service", () => {
     });
 
     it("23. EMPLOYEE is denied both view and dismiss", async () => {
-      const WORK_DATE = "2034-07-03";
+      const WORK_DATE = "2023-07-03";
       const employee = await newEmployee();
       await insertRecord({ employeeId: employee.id, workDate: WORK_DATE, status: "ABSENT" });
 
@@ -441,7 +441,7 @@ describe.skipIf(!available)("attendance exception service", () => {
     });
 
     it("24. cross-company isolation — company B never sees company A's exceptions, and cannot dismiss them", async () => {
-      const WORK_DATE = "2034-07-04";
+      const WORK_DATE = "2023-07-04";
       const employee = await newEmployee();
       await insertRecord({ employeeId: employee.id, workDate: WORK_DATE, status: "ABSENT" });
 
@@ -454,7 +454,7 @@ describe.skipIf(!available)("attendance exception service", () => {
 
   describe("period lock", () => {
     it("25/27. a closed-period exception remains visible and is still dismissible", async () => {
-      const MONTH = "2034-08";
+      const MONTH = "2023-08";
       const WORK_DATE = `${MONTH}-01`;
       const employee = await newEmployee();
       await insertRecord({ employeeId: employee.id, workDate: WORK_DATE, status: "ABSENT" });
@@ -469,7 +469,7 @@ describe.skipIf(!available)("attendance exception service", () => {
     });
 
     it("26. a correction action for a closed-period exception is still rejected by the underlying guard (no bypass)", async () => {
-      const MONTH = "2034-09";
+      const MONTH = "2023-09";
       const WORK_DATE = `${MONTH}-01`;
       const employee = await newEmployee();
       await insertRecord({ employeeId: employee.id, workDate: WORK_DATE, status: "ABSENT" });
@@ -488,7 +488,7 @@ describe.skipIf(!available)("attendance exception service", () => {
 
   describe("integrity", () => {
     it("28. reading the queue causes no attendance mutation", async () => {
-      const WORK_DATE = "2034-10-01";
+      const WORK_DATE = "2023-10-01";
       const employee = await newEmployee();
       await insertRecord({ employeeId: employee.id, workDate: WORK_DATE, status: "ABSENT" });
 
@@ -499,7 +499,7 @@ describe.skipIf(!available)("attendance exception service", () => {
     });
 
     it("29. dismissing changes only attendance_exception_dismissals (and audit_logs)", async () => {
-      const WORK_DATE = "2034-10-02";
+      const WORK_DATE = "2023-10-02";
       const employee = await newEmployee();
       await insertRecord({ employeeId: employee.id, workDate: WORK_DATE, status: "ABSENT" });
 
@@ -515,7 +515,7 @@ describe.skipIf(!available)("attendance exception service", () => {
     });
 
     it("30. undismissing changes only attendance_exception_dismissals (and audit_logs)", async () => {
-      const WORK_DATE = "2034-10-03";
+      const WORK_DATE = "2023-10-03";
       const employee = await newEmployee();
       await insertRecord({ employeeId: employee.id, workDate: WORK_DATE, status: "ABSENT" });
       await exceptionSvc.dismissException(ctx, { employeeId: employee.id, workDate: WORK_DATE, exceptionType: "ABSENT" });
@@ -537,7 +537,7 @@ describe.skipIf(!available)("attendance exception service", () => {
       const employee = await newEmployee();
       // Deliberately no insertRecord call — this employee/date has no attendance_daily_records
       // row at all (the calendar/period sense of "unprocessed").
-      const result = await exceptionSvc.listAttendanceExceptions(ctx, { fromDate: "2034-11-01", toDate: "2034-11-01" }, { page: 1, pageSize: 25 });
+      const result = await exceptionSvc.listAttendanceExceptions(ctx, { fromDate: "2023-11-01", toDate: "2023-11-01" }, { page: 1, pageSize: 25 });
       expect(result.items.map((r) => r.employeeId)).not.toContain(employee.id);
     });
   });

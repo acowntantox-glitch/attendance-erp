@@ -72,7 +72,7 @@ describe.skipIf(!available)("attendance calendar service", () => {
   let emp2Id: string; // Sales / A2 — 1 real record
   let emp3Id: string; // Eng / A2 — 1 real record
 
-  const MONTH = "2027-04";
+  const MONTH = "2021-04";
 
   async function insertRecord(input: { employeeId: string; workDate: string; status: string; workedMinutes: number | null }) {
     await db.insert(schema.attendanceDailyRecords).values({
@@ -363,6 +363,7 @@ describe.skipIf(!available)("attendance calendar service", () => {
       const before = await calendarSvc.getAttendanceCalendar(ctx, MONTH, {}, { page: 1, pageSize: 100 });
       expect(findCell(before, employee.id, workDate)?.status).toBe("INCOMPLETE");
 
+      vi.setSystemTime(new Date(`${workDate}T23:30:00Z`)); // F-07-bump: a correction can only name a time that has already happened
       const correction = await attendanceSvc.requestCorrection(ctx, employee.id, {
         workDate,
         fieldChanged: "CHECK_OUT",

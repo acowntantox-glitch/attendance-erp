@@ -3,9 +3,10 @@ import { apiSuccess, withApiHandler } from "@/lib/api/response";
 import { ValidationError } from "@/lib/errors";
 import { getRequestContext } from "@/lib/auth/request-context";
 import { recalculateDailyRecord } from "@/domains/attendance/service";
+import { dateSchema } from "@/validations/attendance";
 
 type RouteParams = { params: Promise<{ id: string }> };
-const bodySchema = z.object({ workDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) });
+const bodySchema = z.object({ workDate: dateSchema });
 
 export const POST = withApiHandler(async (_requestId, request: Request, ctxParams: RouteParams) => {
   const ctx = await getRequestContext();

@@ -1,9 +1,13 @@
 import { z } from "zod";
-import { enumerateDateRange } from "@/lib/datetime";
+import { daysBetween, isValidIsoDate } from "@/lib/datetime";
 
 // Exported (Batch 9) — reused to validate the `?date=` query param on the employee attendance
 // investigation page, the same "YYYY-MM-DD, no unsafe Date parsing" rule already applied here.
-export const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date must be in YYYY-MM-DD format");
+export const dateSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Date must be in YYYY-MM-DD format")
+  // F-07: a regex accepts 2026-02-31 and 9999-99-99; only a real calendar date may reach a query or a write.
+  .refine(isValidIsoDate, "Date must be a real calendar date");
 // Exported (Batch 8) — reused as-is to validate the `[month]` path segment on the attendance
 // periods routes, the same "YYYY-MM, no unsafe Date parsing" rule Batch 7 already established.
 export const monthSchema = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "Month must be in YYYY-MM format");
@@ -32,9 +36,16 @@ export const updateAttendancePolicySchema = z.object({
 });
 export type UpdateAttendancePolicyInput = z.infer<typeof updateAttendancePolicySchema>;
 
+/** F-19: `sourceMetadata` is client-supplied JSON stored on every event. Capped (serialized size) so a
+ *  punch cannot be used to write arbitrarily large rows. */
+export const SOURCE_METADATA_MAX_BYTES = 4096;
+
 export const attendanceActionSchema = z.object({
   idempotencyKey: z.uuid().optional(),
-  sourceMetadata: z.record(z.string(), z.unknown()).optional(),
+  sourceMetadata: z
+    .record(z.string(), z.unknown())
+    .refine((value) => JSON.stringify(value).length <= SOURCE_METADATA_MAX_BYTES, `sourceMetadata must be at most ${SOURCE_METADATA_MAX_BYTES} bytes.`)
+    .optional(),
 });
 
 export const requestCorrectionSchema = z.object({
@@ -74,10 +85,21 @@ export const attendanceReportFiltersSchema = z
     pageSize: z.coerce.number().int().min(1).optional(),
   })
   .refine((data) => data.fromDate <= data.toDate, { message: "'fromDate' must be on or before 'toDate'.", path: ["toDate"] })
-  .refine((data) => enumerateDateRange(data.fromDate, data.toDate).length <= ATTENDANCE_REPORT_MAX_RANGE_DAYS, {
+  // F-08: arithmetic, not enumeration - the old check built every day of the range before comparing, so a
+  // 0001-9999 range cost millions of iterations before being rejected. (Inclusive day count.)
+  .refine((data) => daysBetween(data.fromDate, data.toDate) + 1 <= ATTENDANCE_REPORT_MAX_RANGE_DAYS, {
     message: `The date range cannot exceed ${ATTENDANCE_REPORT_MAX_RANGE_DAYS} days.`,
     path: ["toDate"],
   });
+
+/** F-08: the same from/to rule for any caller that is not a zod object (route query params). Returns a
+ *  message, or null when the range is valid. */
+export function validateDateRange(from: string, to: string): string | null {
+  if (!isValidIsoDate(from) || !isValidIsoDate(to)) return "'from' and 'to' must be real dates in YYYY-MM-DD format.";
+  if (from > to) return "'from' must be on or before 'to'.";
+  if (daysBetween(from, to) + 1 > ATTENDANCE_REPORT_MAX_RANGE_DAYS) return `The date range cannot exceed ${ATTENDANCE_REPORT_MAX_RANGE_DAYS} days.`;
+  return null;
+}
 
 /**
  * Batch 7 monthly calendar. No `status` filter (§9) — a matrix shows every day at once, so "only
@@ -124,7 +146,7 @@ export const attendanceExceptionFiltersSchema = z
     pageSize: z.coerce.number().int().min(1).optional(),
   })
   .refine((data) => data.fromDate <= data.toDate, { message: "'fromDate' must be on or before 'toDate'.", path: ["toDate"] })
-  .refine((data) => enumerateDateRange(data.fromDate, data.toDate).length <= ATTENDANCE_REPORT_MAX_RANGE_DAYS, {
+  .refine((data) => daysBetween(data.fromDate, data.toDate) + 1 <= ATTENDANCE_REPORT_MAX_RANGE_DAYS, {
     message: `The date range cannot exceed ${ATTENDANCE_REPORT_MAX_RANGE_DAYS} days.`,
     path: ["toDate"],
   });

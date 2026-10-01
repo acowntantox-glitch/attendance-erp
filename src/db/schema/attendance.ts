@@ -314,8 +314,8 @@ export const attendanceExceptionDismissals = pgTable(
 );
 
 /**
- * Batch 12 — the one company-level attendance policy. At most one row per company (unique
- * `company_id`); a company that has never configured a policy simply has no row and the
+ * Batch 12 — the company-level attendance policy. F-06: effective-dated - one row per (company,
+ * `effective_from`); the row in force for a work date is the latest one starting on or before it. A company that has never configured a policy simply has no row and the
  * calculation path falls back to `DEFAULT_ATTENDANCE_POLICY` (see domains/attendance/model.ts),
  * which reproduces the pre-policy behavior exactly — so no backfill is needed.
  *
@@ -335,11 +335,15 @@ export const attendancePolicies = pgTable(
     earlyDepartureGraceMinutes: integer("early_departure_grace_minutes").notNull().default(0),
     overtimeThresholdMinutes: integer("overtime_threshold_minutes").notNull().default(0),
     minimumWorkedMinutes: integer("minimum_worked_minutes"),
+    // F-06 - the first work date this row applies to (company-local calendar date). A work date uses
+    // the row with the greatest effective_from <= that date, so saving a new policy never changes how
+    // earlier dates are (re)calculated. No row at all for a date => DEFAULT_ATTENDANCE_POLICY.
+    effectiveFrom: date("effective_from").notNull().default("1970-01-01"),
     updatedByUserId: uuid("updated_by_user_id").references(() => users.id, { onDelete: "set null" }),
     ...timestamps,
   },
   (table) => [
-    uniqueIndex("attendance_policies_company_unique").on(table.companyId),
+    uniqueIndex("attendance_policies_company_effective_from_unique").on(table.companyId, table.effectiveFrom),
     check("attendance_policies_default_grace_nonneg", sql`${table.defaultGracePeriodMinutes} >= 0`),
     check("attendance_policies_early_grace_nonneg", sql`${table.earlyDepartureGraceMinutes} >= 0`),
     check("attendance_policies_overtime_threshold_nonneg", sql`${table.overtimeThresholdMinutes} >= 0`),

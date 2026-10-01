@@ -80,6 +80,26 @@ export function addDays(dateStr: string, days: number): string {
   return result.toISOString().slice(0, 10);
 }
 
+/** Calendar dates the app accepts as a work date: real calendar days, year 1900-2100. (The lower
+ *  bound also avoids `Date.UTC`'s 0-99 -> 1900s quirk; neither bound excludes any real attendance.) */
+export function isValidIsoDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number) as [number, number, number];
+  if (year < 1900 || year > 2100) return false;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+/** Whole days from `from` to `to` (negative when `to` is earlier), by arithmetic - never by enumerating
+ *  the days between, so it is O(1) however wide the range. Both must already be valid dates. */
+export function daysBetween(from: string, to: string): number {
+  const parse = (value: string) => {
+    const [year = 0, month = 1, day = 1] = value.split("-").map(Number);
+    return Date.UTC(year, month - 1, day);
+  };
+  return Math.round((parse(to) - parse(from)) / DAY_MS);
+}
+
 /** Every `YYYY-MM-DD` date from `from` to `to` inclusive. Empty if `to` is before `from`. */
 export function enumerateDateRange(from: string, to: string): string[] {
   const dates: string[] = [];

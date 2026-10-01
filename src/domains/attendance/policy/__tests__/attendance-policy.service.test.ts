@@ -106,8 +106,8 @@ describe.skipIf(!available)("attendance policy (Batch 12)", () => {
         minimumWorkedMinutes: null,
         isDefault: true,
       });
-      expect(await policyRepo.attendancePolicyRepository.getByCompanyId(companyBId)).toBeNull();
-      expect(await policySvc.resolveAttendancePolicy(companyBId)).toEqual({
+      expect(await policyRepo.attendancePolicyRepository.getEffectiveFor(companyBId, "2099-01-01")).toBeNull();
+      expect(await policySvc.resolveAttendancePolicy(companyBId, "2026-03-02")).toEqual({
         defaultGracePeriodMinutes: 0,
         earlyDepartureGraceMinutes: 0,
         overtimeThresholdMinutes: 0,
@@ -173,13 +173,16 @@ describe.skipIf(!available)("attendance policy (Batch 12)", () => {
     });
 
     it("the DB check constraint rejects negative values even if validation were bypassed", async () => {
-      await expect(policyRepo.attendancePolicyRepository.upsert(companyBId, { ...VALID, overtimeThresholdMinutes: -1 }, null)).rejects.toThrow();
+      await expect(policyRepo.attendancePolicyRepository.upsert(companyBId, "2026-01-01", { ...VALID, overtimeThresholdMinutes: -1 }, null)).rejects.toThrow();
     });
   });
 
   describe("central recalculation path", () => {
+    // F-06: these tests calculate dates in March 2026, and a policy now applies from its effective date
+    // forward, so the fixture policy is effective from the start of 2026 (a service save would start
+    // today, which is correctly AFTER these dates and would not apply to them).
     async function setPolicy(policy: typeof VALID | { defaultGracePeriodMinutes: number; earlyDepartureGraceMinutes: number; overtimeThresholdMinutes: number; minimumWorkedMinutes: number | null }) {
-      await policySvc.updateAttendancePolicy(ctx, policy);
+      await policyRepo.attendancePolicyRepository.upsert(companyAId, "2026-01-01", policy, adminUserId);
     }
 
     it("no policy row -> today's behavior; a saved policy changes only later calculations", async () => {
@@ -206,7 +209,7 @@ describe.skipIf(!available)("attendance policy (Batch 12)", () => {
 
     it("loads the policy exactly once per recalculation and passes it to the engine", async () => {
       await setPolicy(VALID);
-      const spy = vi.spyOn(policyRepo.attendancePolicyRepository, "getByCompanyId");
+      const spy = vi.spyOn(policyRepo.attendancePolicyRepository, "getEffectiveFor");
       await attendanceSvc.recalculateDailyRecord(ctx, employeeId, "2026-03-02");
       expect(spy).toHaveBeenCalledTimes(1);
       expect(spy.mock.calls[0]![0]).toBe(companyAId);
@@ -260,13 +263,150 @@ describe.skipIf(!available)("attendance policy (Batch 12)", () => {
         correctedValue: new Date("2026-03-10T09:20:00Z"),
         reason: "Forgot to check in — policy path test",
       });
-      const spy = vi.spyOn(policyRepo.attendancePolicyRepository, "getByCompanyId");
+      const spy = vi.spyOn(policyRepo.attendancePolicyRepository, "getEffectiveFor");
       await attendanceSvc.approveCorrection(ctxReviewer, correction.id);
       expect(spy).toHaveBeenCalled();
 
       const { record } = await attendanceSvc.getAttendanceDay(ctx, employeeId, "2026-03-10");
       // Synthetic session (no check-out yet) is INCOMPLETE, and its 20-minute lateness falls inside the 30-minute fallback grace.
       expect(record).toMatchObject({ status: "INCOMPLETE", lateMinutes: 0 });
+    });
+  });
+
+  // F-06 - the policy that governs a work date is the one effective ON that date.
+  describe("effective-dated policy (F-06)", () => {
+    type Pol = { defaultGracePeriodMinutes: number; earlyDepartureGraceMinutes: number; overtimeThresholdMinutes: number; minimumWorkedMinutes: number | null };
+    const P1: Pol = { defaultGracePeriodMinutes: 0, earlyDepartureGraceMinutes: 0, overtimeThresholdMinutes: 0, minimumWorkedMinutes: 420 }; // from 2026-01-01
+    const P2: Pol = { defaultGracePeriodMinutes: 0, earlyDepartureGraceMinutes: 0, overtimeThresholdMinutes: 0, minimumWorkedMinutes: null }; // from 2026-04-01
+    const upsert = (from: string, policy: Pol) => policyRepo.attendancePolicyRepository.upsert(companyAId, from, policy, adminUserId);
+
+    // A fresh employee per test: a check-in's work date depends on the employee's previous session, so
+    // tests that jump around in (fake) time must not share one.
+    async function freshEmployee() {
+      const [schedule] = await db.select().from(schema.workSchedules).where(eq(schema.workSchedules.companyId, companyAId)).limit(1);
+      const e = await employeeService.createEmployee(ctx, {
+        firstName: "PolF06",
+        lastName: `E-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        workEmail: `pol-f06-${Date.now()}-${Math.random().toString(36).slice(2, 6)}@test.local`,
+        dateOfJoining: "2020-01-01",
+      });
+      await workforceSvc.assignEmployeeSchedule(ctx, e.id, { workScheduleId: schedule!.id, effectiveFrom: "2026-01-01" });
+      return e.id;
+    }
+
+    async function worked6h(id: string, workDate: string) {
+      vi.setSystemTime(new Date(`${workDate}T09:00:00Z`));
+      await attendanceSvc.checkIn(ctx, id);
+      vi.setSystemTime(new Date(`${workDate}T15:00:00Z`));
+      await attendanceSvc.checkOut(ctx, id); // 6h < 7h minimum
+      vi.useRealTimers();
+    }
+
+    it("resolves the row in force on each date: defaults before the first policy, then each policy from its own start", async () => {
+      await db.delete(schema.attendancePolicies).where(eq(schema.attendancePolicies.companyId, companyAId));
+      await upsert("2026-01-01", P1);
+      await upsert("2026-04-01", P2);
+
+      expect((await policySvc.resolveAttendancePolicy(companyAId, "2025-12-31")).minimumWorkedMinutes).toBeNull(); // defaults
+      expect((await policySvc.resolveAttendancePolicy(companyAId, "2026-01-01")).minimumWorkedMinutes).toBe(420);
+      expect((await policySvc.resolveAttendancePolicy(companyAId, "2026-03-31")).minimumWorkedMinutes).toBe(420);
+      expect((await policySvc.resolveAttendancePolicy(companyAId, "2026-04-01")).minimumWorkedMinutes).toBeNull();
+      expect((await policySvc.resolveAttendancePolicy(companyAId, "2099-01-01")).minimumWorkedMinutes).toBeNull();
+    });
+
+    it("attendance before and after a policy change is calculated under its own policy, and history stays put on recalculation", async () => {
+      await db.delete(schema.attendancePolicies).where(eq(schema.attendancePolicies.companyId, companyAId));
+      await upsert("2026-01-01", P1);
+      const employeeId = await freshEmployee();
+      await worked6h(employeeId, "2026-03-16"); // before the change
+      await worked6h(employeeId, "2026-04-14"); // after the change
+
+      // Only P1 exists so far: both dates are UNDER_HOURS.
+      expect((await attendanceSvc.recalculateDailyRecord(ctx, employeeId, "2026-03-16")).status).toBe("UNDER_HOURS");
+
+      await upsert("2026-04-01", P2); // the policy changes: minimum no longer applies FROM 1 April
+
+      // Historical recalculation: March keeps P1 (still UNDER_HOURS); April uses P2 (now PRESENT).
+      expect((await attendanceSvc.recalculateDailyRecord(ctx, employeeId, "2026-03-16")).status).toBe("UNDER_HOURS");
+      expect((await attendanceSvc.recalculateDailyRecord(ctx, employeeId, "2026-04-14")).status).toBe("PRESENT");
+    });
+
+    it("saving through the service takes effect from the company's today and never reaches earlier dates", async () => {
+      await db.delete(schema.attendancePolicies).where(eq(schema.attendancePolicies.companyId, companyAId));
+      const employeeId = await freshEmployee();
+      await worked6h(employeeId, "2026-03-17");
+      expect((await attendanceSvc.recalculateDailyRecord(ctx, employeeId, "2026-03-17")).status).toBe("PRESENT"); // defaults, no policy yet
+
+      const saved = await policySvc.updateAttendancePolicy(ctx, { ...P1, minimumWorkedMinutes: 480 });
+      expect(saved.effectiveFrom).toBe(new Date().toISOString().slice(0, 10)); // company timezone is UTC
+
+      expect((await attendanceSvc.recalculateDailyRecord(ctx, employeeId, "2026-03-17")).status).toBe("PRESENT"); // history unchanged
+      expect((await policySvc.resolveAttendancePolicy(companyAId, saved.effectiveFrom!)).minimumWorkedMinutes).toBe(480);
+
+      // A second save on the same day replaces that day's row; it never adds a second one.
+      await policySvc.updateAttendancePolicy(ctx, { ...P1, minimumWorkedMinutes: 300 });
+      const rows = await db.select().from(schema.attendancePolicies).where(eq(schema.attendancePolicies.companyId, companyAId));
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.minimumWorkedMinutes).toBe(300);
+    });
+
+    it("correction approval uses the policy effective on the corrected work date", async () => {
+      await db.delete(schema.attendancePolicies).where(eq(schema.attendancePolicies.companyId, companyAId));
+      await upsert("2026-01-01", { ...P1, minimumWorkedMinutes: null, defaultGracePeriodMinutes: 30 });
+      await upsert("2026-06-01", { ...P1, minimumWorkedMinutes: null, defaultGracePeriodMinutes: 0 }); // changes later
+      const employeeId = await freshEmployee();
+
+      const correction = await attendanceSvc.requestCorrection(ctx, employeeId, {
+        workDate: "2026-03-12",
+        fieldChanged: "CHECK_IN",
+        correctedValue: new Date("2026-03-12T09:20:00Z"),
+        reason: "Forgot to check in",
+      });
+      await attendanceSvc.approveCorrection(ctxReviewer, correction.id);
+      // 20 minutes late is inside the 30-minute grace that was in force in March - not today's 0.
+      const { record } = await attendanceSvc.getAttendanceDay(ctx, employeeId, "2026-03-12");
+      expect(record).toMatchObject({ status: "INCOMPLETE", lateMinutes: 0 });
+    });
+
+    it("Process Day (manual) and the scheduled job both apply the policy effective on the processed date", async () => {
+      await db.delete(schema.attendancePolicies).where(eq(schema.attendancePolicies.companyId, companyAId));
+      await upsert("2026-01-01", P1);
+      await upsert("2026-04-01", P2);
+      const processing = await import("../../processing/attendance-processing.service");
+      const auto = await import("../../processing/attendance-auto-processing.service");
+      const employeeId = await freshEmployee();
+
+      // Manual: the same 6h day on either side of the change.
+      await worked6h(employeeId, "2026-03-18");
+      await worked6h(employeeId, "2026-04-15");
+      expect((await processing.processEmployeeAttendanceDay(ctx, { employeeId, workDate: "2026-03-18" })).status).toBe("UNDER_HOURS");
+      expect((await processing.processEmployeeAttendanceDay(ctx, { employeeId, workDate: "2026-04-15" })).status).toBe("PRESENT");
+
+      // Scheduled: a closed 6h session with NO daily record yet, materialized by the job.
+      for (const [date, expected] of [["2026-03-19", "UNDER_HOURS"], ["2026-04-16", "PRESENT"]] as const) {
+        const [session] = await db
+          .insert(schema.attendanceOpenSessions)
+          .values({
+            companyId: companyAId,
+            employeeId,
+            workDate: date,
+            status: "CLOSED",
+            checkInAt: new Date(`${date}T09:00:00Z`),
+            checkOutAt: new Date(`${date}T15:00:00Z`),
+            expectedStartAt: new Date(`${date}T09:00:00Z`),
+            expectedEndAt: new Date(`${date}T18:00:00Z`),
+          })
+          .returning();
+        await db.insert(schema.attendanceEvents).values([
+          { companyId: companyAId, employeeId, sessionId: session!.id, workDate: date, eventType: "CHECK_IN", occurredAt: new Date(`${date}T09:00:00Z`) },
+          { companyId: companyAId, employeeId, sessionId: session!.id, workDate: date, eventType: "CHECK_OUT", occurredAt: new Date(`${date}T15:00:00Z`) },
+        ]);
+        await auto.processCompanyWorkDate(companyAId, date, "SCHEDULED");
+        const row = await db.query.attendanceDailyRecords.findFirst({
+          where: (t, { and, eq: dbEq }) => and(dbEq(t.employeeId, employeeId), dbEq(t.workDate, date)),
+        });
+        expect(row?.status).toBe(expected);
+      }
     });
   });
 });

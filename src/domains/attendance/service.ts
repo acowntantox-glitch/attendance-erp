@@ -9,7 +9,7 @@ import { employeeRepository } from "@/domains/employee/repository";
 import { EmployeeNotFoundError } from "@/domains/employee/errors";
 import { getWorkforceDayInfo, resolveEmployeeTimezone, resolveWorkforceDayInfo } from "@/domains/workforce/service";
 import type { WorkforceDayInfo } from "@/domains/workforce/model";
-import { addDays, utcToZonedWallTime, zonedWallTimeToUtc } from "@/lib/datetime";
+import { addDays, isValidIsoDate, utcToZonedWallTime, zonedWallTimeToUtc } from "@/lib/datetime";
 import { applyCorrectionsToSessions, calculateDailyAttendance, closedBreakMinutes, diffMinutes } from "./calculation";
 import { assertAttendancePeriodOpen, isAttendancePeriodClosed } from "./periods/attendance-period.service";
 import { attendancePeriodRepository } from "./periods/attendance-period.repository";
@@ -25,6 +25,8 @@ import {
 import {
   AlreadyCheckedInError,
   AttendanceChangedConcurrentlyError,
+  IdempotencyKeyReuseError,
+  InvalidAttendanceDateError,
   AttendanceCorrectionNotFoundError,
   AttendancePeriodLockedError,
   ConflictingCorrectionError,
@@ -93,6 +95,27 @@ function resolveTargetEmployeeId(ctx: RequestContext, requestedEmployeeId: strin
 }
 
 // ---------------------------------------------------------------------------
+// F-07 - server-side date boundaries for every attendance write that names a date. The server's clock and
+// the employee's own timezone decide what "today" is; nothing the client sends is trusted for it.
+// ---------------------------------------------------------------------------
+
+/** Clock-skew allowance for a corrected TIME the user typed in (never for a work date). */
+const CORRECTION_TIME_TOLERANCE_MS = 5 * 60_000;
+
+export function assertValidWorkDate(workDate: string): void {
+  if (!isValidIsoDate(workDate)) throw new InvalidAttendanceDateError("The work date must be a real calendar date (YYYY-MM-DD).");
+}
+
+/** A work date later than the current date in `timezone` has not happened: it may be read (a provisional
+ *  view) but never written, recalculated, processed or corrected. Past dates are always allowed. */
+export function assertWorkDateNotInFuture(workDate: string, timezone: string, now: Date = new Date()): void {
+  assertValidWorkDate(workDate);
+  if (workDate > utcToZonedWallTime(now, timezone).date) {
+    throw new InvalidAttendanceDateError("Attendance cannot be recorded, recalculated or corrected for a date that has not happened yet.");
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Work date resolution + Workforce snapshot capture (approved Phase 4 design)
 // ---------------------------------------------------------------------------
 
@@ -117,7 +140,7 @@ async function resolveCheckInContext(ctx: RequestContext, employeeId: string, ch
     workDate = utcToZonedWallTime(checkInInstant, timezone).date;
   }
 
-  const [dayInfo, policy] = await Promise.all([getWorkforceDayInfo(ctx, employeeId, workDate), resolveAttendancePolicy(ctx.companyId)]);
+  const [dayInfo, policy] = await Promise.all([getWorkforceDayInfo(ctx, employeeId, workDate), resolveAttendancePolicy(ctx.companyId, workDate)]);
   const window = dayInfo.expectedWindow;
   return {
     workDate,
@@ -165,18 +188,48 @@ async function refreshDailyRecordIfExists(
 }
 
 /**
+ * F-20 - the event a retry's idempotency key already produced, or null. A key that belongs to a
+ * DIFFERENT kind of action (check-in vs check-out vs break) is refused: it is a retry token for one
+ * action, never a lookup into another one's result. Pass `tx` to look inside a transaction (after the
+ * day lock, so a concurrent first request that has just committed is seen).
+ */
+async function findIdempotentReplay(
+  employeeId: string,
+  idempotencyKey: string,
+  expected: AttendanceEvent["eventType"],
+  executor: DbExecutor = db,
+): Promise<AttendanceEvent | null> {
+  const event = await attendanceEventRepository.findByIdempotencyKey(employeeId, idempotencyKey, executor);
+  if (!event) return null;
+  if (event.eventType !== expected) throw new IdempotencyKeyReuseError();
+  return event;
+}
+
+/**
  * The lock-order prologue shared by check-out and the break operations: period lock -> day lock ->
  * open-session row lock. The session's work date is only known from an unlocked peek, so after
  * locking the real row is re-read and must be the same session; if it changed in between (a
  * concurrent punch on another work date) nothing is written and the caller retries.
  */
-async function lockOpenSessionForPunch(companyId: string, employeeId: string, peek: { id: string; workDate: string }, tx: Transaction) {
+async function lockOpenSessionForPunch(
+  companyId: string,
+  employeeId: string,
+  peek: { id: string; workDate: string },
+  tx: Transaction,
+  idempotency?: { key: string | undefined; expected: AttendanceEvent["eventType"] },
+) {
   await assertAttendancePeriodOpen(companyId, peek.workDate, tx);
   await lockAttendanceDay(tx, employeeId, peek.workDate);
+  // F-20 - under the day lock: a concurrent request with the same key that has just committed is a replay
+  // (return its result), not "no open session".
+  if (idempotency?.key) {
+    const replay = await findIdempotentReplay(employeeId, idempotency.key, idempotency.expected, tx);
+    if (replay) return { kind: "replay" as const, replay };
+  }
   const open = await attendanceSessionRepository.findOpenForEmployeeLocked(employeeId, tx);
   if (!open) throw new NoOpenSessionError();
   if (open.id !== peek.id) throw new AttendanceChangedConcurrentlyError();
-  return open;
+  return { kind: "open" as const, open };
 }
 
 export async function checkIn(ctx: RequestContext, requestedEmployeeId: string, input: CheckInInput = {}): Promise<AttendanceSession> {
@@ -196,11 +249,9 @@ export async function checkIn(ctx: RequestContext, requestedEmployeeId: string, 
   }
 
   if (input.idempotencyKey) {
-    const existingEvent = await attendanceEventRepository.findByIdempotencyKey(targetEmployeeId, input.idempotencyKey);
-    if (existingEvent) {
-      const existingSession = await attendanceSessionRepository.findById(existingEvent.sessionId);
-      if (existingSession) return existingSession;
-    }
+    const replay = await findIdempotentReplay(targetEmployeeId, input.idempotencyKey, "CHECK_IN");
+    const existingSession = replay ? await attendanceSessionRepository.findById(replay.sessionId) : null;
+    if (existingSession) return existingSession;
   }
 
   const occurredAt = new Date();
@@ -213,7 +264,14 @@ export async function checkIn(ctx: RequestContext, requestedEmployeeId: string, 
   const previousWorkDate = peekOpen && peekOpen.workDate !== workDate ? peekOpen.workDate : null;
   const previousDayInfo = previousWorkDate ? await preloadDayInfoIfRecordExists(ctx.companyId, targetEmployeeId, previousWorkDate) : undefined;
 
+  // F-05 - set only when this check-in actually abandons an older session; audited AFTER the commit so a
+  // rolled-back check-in never leaves an "abandoned" audit entry behind.
+  let abandoned: { id: string; status: string; workDate: string } | null = null;
+  let replayed = false;
+
   const session = await db.transaction(async (tx) => {
+    abandoned = null; // (a retried/aborted attempt must not leak a previous attempt's value)
+    replayed = false;
     // Batch 8 — must be the first thing this transaction does: the SHARE lock it takes on the
     // period row is what makes this check race-safe against a concurrent close (see
     // attendance-period.repository.ts's module doc).
@@ -227,6 +285,17 @@ export async function checkIn(ctx: RequestContext, requestedEmployeeId: string, 
     // Row-locked implicitly by the partial unique index on (employeeId) WHERE status='OPEN' — a
     // concurrent duplicate check-in racing this same check fails on that constraint below, not on
     // an explicit SELECT ... FOR UPDATE (there is no existing row to lock for a brand-new session).
+    // F-20 - a concurrent request with the SAME key that has just committed: this is its retry, so return
+    // that session instead of failing with "already checked in" (or double-writing).
+    if (input.idempotencyKey) {
+      const replay = await findIdempotentReplay(targetEmployeeId, input.idempotencyKey, "CHECK_IN", tx);
+      const replaySession = replay ? await attendanceSessionRepository.findById(replay.sessionId, tx) : null;
+      if (replaySession) {
+        replayed = true;
+        return replaySession;
+      }
+    }
+
     const openExisting = await attendanceSessionRepository.findOpenForEmployeeLocked(targetEmployeeId, tx);
     if (openExisting && openExisting.workDate !== workDate && openExisting.workDate !== previousWorkDate) {
       // An open session on a work date we did not lock appeared after the peek.
@@ -243,14 +312,7 @@ export async function checkIn(ctx: RequestContext, requestedEmployeeId: string, 
       // never closed and is now superseded. Transition it out rather than blocking this check-in
       // forever (§11: "the employee must still be able to CHECK_IN on a later day").
       await attendanceSessionRepository.markAbandoned(tx, openExisting.id);
-      await recordAuditLog(ctx, {
-        action: "attendance.session.abandon",
-        entityType: "attendance_session",
-        entityId: openExisting.id,
-        oldData: { status: openExisting.status, workDate: openExisting.workDate },
-        newData: { status: "ABANDONED" },
-        metadata: { employeeId: targetEmployeeId, supersededByWorkDate: workDate },
-      });
+      abandoned = { id: openExisting.id, status: openExisting.status, workDate: openExisting.workDate };
       // F-01 - the abandoned session's work date: refresh its record if one exists (never create
       // one). A closed period keeps its existing frozen behaviour: it is left untouched.
       const previousPeriod = await attendancePeriodRepository.findByCompanyAndMonth(ctx.companyId, openExisting.workDate.slice(0, 7), tx);
@@ -301,6 +363,20 @@ export async function checkIn(ctx: RequestContext, requestedEmployeeId: string, 
     }
   });
 
+  if (replayed) return session; // the original request already wrote (and audited) everything
+
+  const abandonedSession = abandoned as { id: string; status: string; workDate: string } | null;
+  if (abandonedSession) {
+    await recordAuditLog(ctx, {
+      action: "attendance.session.abandon",
+      entityType: "attendance_session",
+      entityId: abandonedSession.id,
+      oldData: { status: abandonedSession.status, workDate: abandonedSession.workDate },
+      newData: { status: "ABANDONED" },
+      metadata: { employeeId: targetEmployeeId, supersededByWorkDate: workDate },
+    });
+  }
+
   await recordAuditLog(ctx, {
     action: "attendance.check_in",
     entityType: "attendance_session",
@@ -318,22 +394,37 @@ export async function checkOut(ctx: RequestContext, requestedEmployeeId: string,
   await loadEmployeeInCompany(ctx, targetEmployeeId);
 
   if (input.idempotencyKey) {
-    const existingEvent = await attendanceEventRepository.findByIdempotencyKey(targetEmployeeId, input.idempotencyKey);
-    if (existingEvent) {
-      const existingSession = await attendanceSessionRepository.findById(existingEvent.sessionId);
-      if (existingSession) return existingSession;
-    }
+    const replay = await findIdempotentReplay(targetEmployeeId, input.idempotencyKey, "CHECK_OUT");
+    const existingSession = replay ? await attendanceSessionRepository.findById(replay.sessionId) : null;
+    if (existingSession) return existingSession;
   }
 
   const occurredAt = new Date();
 
   const peek = await attendanceSessionRepository.findOpenForEmployee(targetEmployeeId);
-  if (!peek) throw new NoOpenSessionError();
+  if (!peek) {
+    // F-20 - nothing open because a first request with this key already closed it: that is a retry.
+    if (input.idempotencyKey) {
+      const replay = await findIdempotentReplay(targetEmployeeId, input.idempotencyKey, "CHECK_OUT");
+      const replaySession = replay ? await attendanceSessionRepository.findById(replay.sessionId) : null;
+      if (replaySession) return replaySession;
+    }
+    throw new NoOpenSessionError();
+  }
   // Check-out ALWAYS calculates (and creates, if absent) the day's record - inside this transaction.
   const dayInfo = await resolveWorkforceDayInfo(ctx.companyId, targetEmployeeId, peek.workDate);
 
+  let replayedCheckOut = false;
   const session = await db.transaction(async (tx) => {
-    const open = await lockOpenSessionForPunch(ctx.companyId, targetEmployeeId, peek, tx);
+    replayedCheckOut = false;
+    const locked = await lockOpenSessionForPunch(ctx.companyId, targetEmployeeId, peek, tx, { key: input.idempotencyKey, expected: "CHECK_OUT" });
+    if (locked.kind === "replay") {
+      const original = await attendanceSessionRepository.findById(locked.replay.sessionId, tx);
+      if (!original) throw new NoOpenSessionError();
+      replayedCheckOut = true;
+      return original;
+    }
+    const open = locked.open;
 
     const openBreak = await attendanceEventRepository.findOpenBreak(open.id, tx);
     if (openBreak) throw new OpenBreakExistsError();
@@ -363,6 +454,8 @@ export async function checkOut(ctx: RequestContext, requestedEmployeeId: string,
     return closed;
   });
 
+  if (replayedCheckOut) return session; // already written and audited by the original request
+
   await recordAuditLog(ctx, {
     action: "attendance.check_out",
     entityType: "attendance_session",
@@ -382,7 +475,7 @@ export async function startBreak(ctx: RequestContext, requestedEmployeeId: strin
   await loadEmployeeInCompany(ctx, targetEmployeeId);
 
   if (input.idempotencyKey) {
-    const existing = await attendanceEventRepository.findByIdempotencyKey(targetEmployeeId, input.idempotencyKey);
+    const existing = await findIdempotentReplay(targetEmployeeId, input.idempotencyKey, "BREAK_START");
     if (existing) return existing;
   }
 
@@ -392,8 +485,15 @@ export async function startBreak(ctx: RequestContext, requestedEmployeeId: strin
   if (!peek) throw new NoOpenSessionError();
   const dayInfo = await preloadDayInfoIfRecordExists(ctx.companyId, targetEmployeeId, peek.workDate);
 
+  let replayedBreak: AttendanceEvent | null = null;
   const event = await db.transaction(async (tx) => {
-    const open = await lockOpenSessionForPunch(ctx.companyId, targetEmployeeId, peek, tx);
+    replayedBreak = null;
+    const locked = await lockOpenSessionForPunch(ctx.companyId, targetEmployeeId, peek, tx, { key: input.idempotencyKey, expected: "BREAK_START" });
+    if (locked.kind === "replay") {
+      replayedBreak = locked.replay;
+      return locked.replay;
+    }
+    const open = locked.open;
     const openBreak = await attendanceEventRepository.findOpenBreak(open.id, tx);
     if (openBreak) throw new OpenBreakExistsError();
 
@@ -417,6 +517,8 @@ export async function startBreak(ctx: RequestContext, requestedEmployeeId: strin
     }
   });
 
+  if (replayedBreak) return event; // already written and audited by the original request
+
   await recordAuditLog(ctx, {
     action: "attendance.break_start",
     entityType: "attendance_event",
@@ -434,7 +536,7 @@ export async function endBreak(ctx: RequestContext, requestedEmployeeId: string,
   await loadEmployeeInCompany(ctx, targetEmployeeId);
 
   if (input.idempotencyKey) {
-    const existing = await attendanceEventRepository.findByIdempotencyKey(targetEmployeeId, input.idempotencyKey);
+    const existing = await findIdempotentReplay(targetEmployeeId, input.idempotencyKey, "BREAK_END");
     if (existing) return existing;
   }
 
@@ -444,8 +546,15 @@ export async function endBreak(ctx: RequestContext, requestedEmployeeId: string,
   if (!peek) throw new NoOpenSessionError();
   const dayInfo = await preloadDayInfoIfRecordExists(ctx.companyId, targetEmployeeId, peek.workDate);
 
+  let replayedBreak: AttendanceEvent | null = null;
   const event = await db.transaction(async (tx) => {
-    const open = await lockOpenSessionForPunch(ctx.companyId, targetEmployeeId, peek, tx);
+    replayedBreak = null;
+    const locked = await lockOpenSessionForPunch(ctx.companyId, targetEmployeeId, peek, tx, { key: input.idempotencyKey, expected: "BREAK_END" });
+    if (locked.kind === "replay") {
+      replayedBreak = locked.replay;
+      return locked.replay;
+    }
+    const open = locked.open;
     const openBreak = await attendanceEventRepository.findOpenBreak(open.id, tx);
     if (!openBreak) throw new NoOpenBreakError();
 
@@ -468,6 +577,8 @@ export async function endBreak(ctx: RequestContext, requestedEmployeeId: string,
       throw error;
     }
   });
+
+  if (replayedBreak) return event; // already written and audited by the original request
 
   await recordAuditLog(ctx, {
     action: "attendance.break_end",
@@ -652,7 +763,12 @@ async function buildCorrectionOverride(
     };
   }
 
-  const sessionId = await resolveMissingPunchSessionId(correction.employeeId, correction.workDate, correction.fieldChanged, executor);
+  // F-05 - approving a missing-CHECK_OUT correction closes the stranded OPEN session itself (see
+  // `closeSessionResolvedByCorrection`), so on every later recalculation the target is that already-
+  // closed session, not "the one open session".
+  const sessionId =
+    (correction.fieldChanged === "CHECK_OUT" ? await findSessionClosedByCorrection(correction, executor) : null) ??
+    (await resolveMissingPunchSessionId(correction.employeeId, correction.workDate, correction.fieldChanged, executor));
   return {
     correctionId: correction.id,
     fieldChanged: correction.fieldChanged,
@@ -660,6 +776,36 @@ async function buildCorrectionOverride(
     correctedValue: correction.correctedValue,
     sessionId,
   };
+}
+
+/**
+ * F-05 - the session a missing-CHECK_OUT correction already closed: CLOSED, `checkOutAt` exactly the
+ * correction's value, and no real CHECK_OUT event (a genuine check-out always has one). Deterministic
+ * because `closeSessionResolvedByCorrection` is the only writer of that combination.
+ */
+async function findSessionClosedByCorrection(correction: AttendanceCorrection, executor: DbExecutor): Promise<string | null> {
+  const sessions = await attendanceSessionRepository.listForEmployeeWorkDate(correction.employeeId, correction.workDate, executor);
+  const candidates = sessions.filter((s) => s.status === "CLOSED" && s.checkOutAt?.getTime() === correction.correctedValue.getTime());
+  if (candidates.length === 0) return null;
+  const events = await attendanceEventRepository.listForEmployeeWorkDate(correction.employeeId, correction.workDate, executor);
+  const withRealCheckOut = new Set(events.filter((e) => e.eventType === "CHECK_OUT").map((e) => e.sessionId));
+  return candidates.find((s) => !withRealCheckOut.has(s.id))?.id ?? null;
+}
+
+/**
+ * F-05 - an approved "I forgot to check out" correction supplies the missing check-out, so the
+ * session it resolves must leave OPEN. Left OPEN it would (a) block closing the attendance period
+ * (`countOpenInRange`), (b) keep the employee's same-work-date check-in refused (`AlreadyCheckedIn`)
+ * and (c) never resolve at all for an employee who has left (check-in is refused for them). Only a
+ * session still OPEN is closed - an ABANDONED one is already out of the way. The events stay
+ * untouched (no synthetic CHECK_OUT event): the correction row is the record of why. Runs inside the
+ * approval transaction, under the day lock, before any session row lock (period -> day -> session).
+ */
+async function closeSessionResolvedByCorrection(correction: AttendanceCorrection, tx: Transaction): Promise<void> {
+  await lockAttendanceDay(tx, correction.employeeId, correction.workDate);
+  const open = await attendanceSessionRepository.findOpenForEmployeeLocked(correction.employeeId, tx);
+  if (!open || open.workDate !== correction.workDate) return;
+  await attendanceSessionRepository.markClosed(tx, open.id, correction.correctedValue);
 }
 
 /**
@@ -683,7 +829,7 @@ async function computeDailyResult(
   // manual recalculation, correction approval, day processing and scheduled materialization) and
   // passed down, never re-read per correction or per caller. It applies to this calculation only;
   // see attendance-policy.service.ts.
-  const policy = await resolveAttendancePolicy(companyId, executor);
+  const policy = await resolveAttendancePolicy(companyId, workDate, executor);
 
   // Only APPROVED corrections may affect calculation — PENDING/REJECTED never reach this list
   // (see attendanceCorrectionRepository.listApprovedForWorkDate). This is the one authoritative
@@ -790,7 +936,14 @@ export async function materializeMissingDailyRecord(companyId: string, employeeI
 export async function recalculateDailyRecord(ctx: RequestContext, requestedEmployeeId: string, workDate: string): Promise<AttendanceDailyRecord> {
   requirePermission(ctx, "attendance.recalculate");
   const targetEmployeeId = resolveTargetEmployeeId(ctx, requestedEmployeeId);
-  await loadEmployeeInCompany(ctx, targetEmployeeId);
+  const employee = await loadEmployeeInCompany(ctx, targetEmployeeId);
+
+  // F-07 - a real date, not in the future for THIS employee's timezone, and not before they joined.
+  assertValidWorkDate(workDate);
+  assertWorkDateNotInFuture(workDate, await resolveEmployeeTimezone(ctx, targetEmployeeId));
+  if (workDate < employee.dateOfJoining) {
+    throw new InvalidAttendanceDateError("Attendance cannot be calculated for a date before the employee joined.");
+  }
 
   // Batch 8 — a closed period cannot be recalculated (§15). Wrapped in its own transaction purely
   // to hold the period's SHARE lock for the duration of the write that follows; `recalculateDailyRecordInternal`
@@ -824,6 +977,7 @@ export async function getAttendanceDay(
   requirePermission(ctx, "attendance.view");
   const targetEmployeeId = resolveTargetEmployeeId(ctx, requestedEmployeeId);
   await loadEmployeeInCompany(ctx, targetEmployeeId);
+  assertValidWorkDate(workDate); // a read may look at any real date (future dates give a provisional view), never a malformed one
 
   const rawSessions = await attendanceSessionRepository.listForEmployeeWorkDate(targetEmployeeId, workDate);
   const sessions = await Promise.all(rawSessions.map(toSessionView));
@@ -982,6 +1136,12 @@ export async function requestCorrection(
   // never silently reinterpreted, since z.iso.datetime({ offset: true }) already requires the
   // client to supply an explicit, unambiguous UTC offset.
   const timezone = await resolveEmployeeTimezone(ctx, targetEmployeeId);
+  // F-07 - nothing can be corrected on a date that has not happened, and a corrected time cannot be in
+  // the future (the server's clock decides, not the browser's).
+  assertWorkDateNotInFuture(input.workDate, timezone);
+  if (input.correctedValue.getTime() > Date.now() + CORRECTION_TIME_TOLERANCE_MS) {
+    throw new InvalidAttendanceDateError("A corrected time cannot be in the future.");
+  }
   const zoned = utcToZonedWallTime(input.correctedValue, timezone);
   if (zoned.date !== input.workDate && zoned.date !== addDays(input.workDate, 1)) {
     throw new InvalidCorrectionTargetError(
@@ -992,8 +1152,12 @@ export async function requestCorrection(
   // Batch 8 — wrapped in a transaction (this function previously used no transaction at all) so
   // the period SHARE lock is held from the very first check through the final INSERT below, not
   // just for one isolated read (§24 race safety).
-  const correction = await db.transaction(async (tx) => {
+  const { correction, created } = await db.transaction(async (tx) => {
     await assertAttendancePeriodOpen(ctx.companyId, input.workDate, tx);
+    // F-09 - serialize requests for the same employee/work date on the shared day lock (period -> day).
+    // The conflict check below is a plain SELECT; without this, two simultaneous requests for the same
+    // target both pass it and both insert (the period SHARE lock above is compatible with itself).
+    await lockAttendanceDay(tx, targetEmployeeId, input.workDate);
 
     let eventId: string | null = null;
     let originalValue: Date | null = null;
@@ -1017,9 +1181,22 @@ export async function requestCorrection(
     // workDate, fieldChanged, eventId) target — reject a new request that would conflict with an
     // existing PENDING or APPROVED one rather than silently choosing one.
     const conflict = await attendanceCorrectionRepository.findConflicting(targetEmployeeId, input.workDate, input.fieldChanged, eventId, tx);
-    if (conflict) throw new ConflictingCorrectionError();
+    if (conflict) {
+      // F-09 - the SAME request repeated (a double-click, a browser/API retry after a timeout): same
+      // requester, still PENDING, identical corrected time and reason. It is that request, not a new one,
+      // so return the original and write nothing - no second row and no second audit entry. Anything else
+      // on the same target (a different value, another requester, an already-reviewed one) is a genuine
+      // conflict and stays refused.
+      const isReplay =
+        conflict.status === "PENDING" &&
+        conflict.requestedByUserId === ctx.userId &&
+        conflict.correctedValue.getTime() === input.correctedValue.getTime() &&
+        conflict.reason === input.reason;
+      if (isReplay) return { correction: conflict, created: false };
+      throw new ConflictingCorrectionError();
+    }
 
-    return attendanceCorrectionRepository.create(
+    const inserted = await attendanceCorrectionRepository.create(
       {
         companyId: ctx.companyId,
         employeeId: targetEmployeeId,
@@ -1033,15 +1210,18 @@ export async function requestCorrection(
       },
       tx,
     );
+    return { correction: inserted, created: true };
   });
 
-  await recordAuditLog(ctx, {
-    action: "attendance.correction.create",
-    entityType: "attendance_correction",
-    entityId: correction.id,
-    newData: correction,
-    metadata: { employeeId: targetEmployeeId },
-  });
+  if (created) {
+    await recordAuditLog(ctx, {
+      action: "attendance.correction.create",
+      entityType: "attendance_correction",
+      entityId: correction.id,
+      newData: correction,
+      metadata: { employeeId: targetEmployeeId },
+    });
+  }
   return correction;
 }
 
@@ -1154,6 +1334,9 @@ async function reviewCorrection(
 
     if (status === "APPROVED") {
       try {
+        if (existing.fieldChanged === "CHECK_OUT" && existing.eventId === null) {
+          await closeSessionResolvedByCorrection(existing, tx);
+        }
         await recalculateDailyRecordInternal(ctx.companyId, existing.employeeId, existing.workDate, tx);
       } catch {
         throw new RecalculationFailedError();

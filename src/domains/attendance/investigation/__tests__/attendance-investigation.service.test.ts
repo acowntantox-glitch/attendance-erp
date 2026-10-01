@@ -136,7 +136,7 @@ describe.skipIf(!available)("attendance investigation service", () => {
 
   describe("daily statuses", () => {
     it("1. PRESENT", async () => {
-      const WORK_DATE = "2033-08-01";
+      const WORK_DATE = "2022-08-01";
       const employee = await newEmployee();
       await workforceSvc.assignEmployeeSchedule(ctx, employee.id, { workScheduleId: daySchedule.id, shiftId: graceShift.id, effectiveFrom: ASSIGNMENT_START });
 
@@ -155,7 +155,7 @@ describe.skipIf(!available)("attendance investigation service", () => {
     });
 
     it("2. LATE", async () => {
-      const WORK_DATE = "2033-08-02";
+      const WORK_DATE = "2022-08-02";
       const employee = await newEmployee();
       await workforceSvc.assignEmployeeSchedule(ctx, employee.id, { workScheduleId: daySchedule.id, shiftId: graceShift.id, effectiveFrom: ASSIGNMENT_START });
 
@@ -170,7 +170,7 @@ describe.skipIf(!available)("attendance investigation service", () => {
     });
 
     it("3. ABSENT", async () => {
-      const WORK_DATE = "2033-08-03";
+      const WORK_DATE = "2022-08-03";
       const employee = await newEmployee();
       await workforceSvc.assignEmployeeSchedule(ctx, employee.id, { workScheduleId: daySchedule.id, effectiveFrom: ASSIGNMENT_START });
 
@@ -181,7 +181,7 @@ describe.skipIf(!available)("attendance investigation service", () => {
     });
 
     it("4. INCOMPLETE", async () => {
-      const WORK_DATE = "2033-08-04";
+      const WORK_DATE = "2022-08-04";
       const employee = await newEmployee();
       await workforceSvc.assignEmployeeSchedule(ctx, employee.id, { workScheduleId: daySchedule.id, effectiveFrom: ASSIGNMENT_START });
 
@@ -199,7 +199,7 @@ describe.skipIf(!available)("attendance investigation service", () => {
     });
 
     it("5. WEEKLY_OFF", async () => {
-      const WORK_DATE = "2033-07-16"; // a Saturday
+      const WORK_DATE = "2022-07-16"; // a Saturday
       const employee = await newEmployee();
       await workforceSvc.assignEmployeeSchedule(ctx, employee.id, { workScheduleId: daySchedule.id, effectiveFrom: ASSIGNMENT_START });
       await workforceSvc.setCompanyDefaultWeeklyOff(ctx, { offDays: [6], effectiveFrom: ASSIGNMENT_START });
@@ -210,7 +210,7 @@ describe.skipIf(!available)("attendance investigation service", () => {
     });
 
     it("6. HOLIDAY", async () => {
-      const WORK_DATE = "2033-08-06";
+      const WORK_DATE = "2022-08-06";
       const employee = await newEmployee();
       await workforceSvc.assignEmployeeSchedule(ctx, employee.id, { workScheduleId: daySchedule.id, effectiveFrom: ASSIGNMENT_START });
       await workforceSvc.createHoliday(ctx, { name: `Inv Holiday ${Date.now()}`, date: WORK_DATE, holidayType: "PUBLIC" });
@@ -221,7 +221,7 @@ describe.skipIf(!available)("attendance investigation service", () => {
     });
 
     it("7. WEEKLY_OFF_WORKED", async () => {
-      const WORK_DATE = "2033-07-23"; // also a Saturday
+      const WORK_DATE = "2022-07-23"; // also a Saturday
       const employee = await newEmployee();
       await workforceSvc.assignEmployeeSchedule(ctx, employee.id, { workScheduleId: daySchedule.id, effectiveFrom: ASSIGNMENT_START });
       await workforceSvc.setCompanyDefaultWeeklyOff(ctx, { offDays: [6], effectiveFrom: ASSIGNMENT_START });
@@ -236,7 +236,7 @@ describe.skipIf(!available)("attendance investigation service", () => {
     });
 
     it("8. HOLIDAY_WORKED", async () => {
-      const WORK_DATE = "2033-08-08";
+      const WORK_DATE = "2022-08-08";
       const employee = await newEmployee();
       await workforceSvc.assignEmployeeSchedule(ctx, employee.id, { workScheduleId: daySchedule.id, effectiveFrom: ASSIGNMENT_START });
       await workforceSvc.createHoliday(ctx, { name: `Inv Holiday Worked ${Date.now()}`, date: WORK_DATE, holidayType: "PUBLIC" });
@@ -251,7 +251,7 @@ describe.skipIf(!available)("attendance investigation service", () => {
     });
 
     it("9. NO_SCHEDULE", async () => {
-      const WORK_DATE = "2033-08-09";
+      const WORK_DATE = "2022-08-09";
       const employee = await newEmployee(); // no schedule assignment at all
 
       const result = await investigationSvc.getAttendanceInvestigation(ctx, employee.id, WORK_DATE);
@@ -260,7 +260,7 @@ describe.skipIf(!available)("attendance investigation service", () => {
     });
 
     it("10. UNPROCESSED (closed period, no record)", async () => {
-      const MONTH = "2033-09";
+      const MONTH = "2022-09";
       const WORK_DATE = `${MONTH}-10`;
       const employee = await newEmployee();
       await periodSvc.closeAttendancePeriod(ctx, MONTH);
@@ -275,7 +275,7 @@ describe.skipIf(!available)("attendance investigation service", () => {
 
   describe("sessions, breaks, and events", () => {
     it("11. multiple sessions in one day", async () => {
-      const WORK_DATE = "2033-08-11";
+      const WORK_DATE = "2022-08-11";
       const employee = await newEmployee();
       await workforceSvc.assignEmployeeSchedule(ctx, employee.id, { workScheduleId: daySchedule.id, effectiveFrom: ASSIGNMENT_START });
 
@@ -294,7 +294,7 @@ describe.skipIf(!available)("attendance investigation service", () => {
     });
 
     it("12. open session (no checkout)", async () => {
-      const WORK_DATE = "2033-08-12";
+      const WORK_DATE = "2022-08-12";
       const employee = await newEmployee();
       await workforceSvc.assignEmployeeSchedule(ctx, employee.id, { workScheduleId: daySchedule.id, effectiveFrom: ASSIGNMENT_START });
 
@@ -313,8 +313,8 @@ describe.skipIf(!available)("attendance investigation service", () => {
       const employee = await newEmployee();
       await workforceSvc.assignEmployeeSchedule(ctx, employee.id, { workScheduleId: daySchedule.id, effectiveFrom: ASSIGNMENT_START });
 
-      const DAY1 = "2033-08-13";
-      const DAY2 = "2033-08-14";
+      const DAY1 = "2022-08-13";
+      const DAY2 = "2022-08-14";
       vi.setSystemTime(new Date(`${DAY1}T09:00:00Z`));
       await attendanceSvc.checkIn(ctx, employee.id); // never checked out
       vi.setSystemTime(new Date(`${DAY2}T09:00:00Z`));
@@ -329,7 +329,7 @@ describe.skipIf(!available)("attendance investigation service", () => {
     });
 
     it("14. breaks — a closed session's break interval is reported with start/end/duration", async () => {
-      const WORK_DATE = "2033-08-15";
+      const WORK_DATE = "2022-08-15";
       const employee = await newEmployee();
       await workforceSvc.assignEmployeeSchedule(ctx, employee.id, { workScheduleId: daySchedule.id, effectiveFrom: ASSIGNMENT_START });
 
@@ -356,21 +356,21 @@ describe.skipIf(!available)("attendance investigation service", () => {
       const employee = await newEmployee();
       await workforceSvc.assignEmployeeSchedule(ctx, employee.id, { workScheduleId: daySchedule.id, shiftId: nightShift.id, effectiveFrom: ASSIGNMENT_START });
 
-      const START_DATE = "2033-08-16";
+      const START_DATE = "2022-08-16";
       vi.setSystemTime(new Date(`${START_DATE}T22:00:00Z`));
       await attendanceSvc.checkIn(ctx, employee.id);
-      vi.setSystemTime(new Date("2033-08-17T06:00:00Z"));
+      vi.setSystemTime(new Date("2022-08-17T06:00:00Z"));
       await attendanceSvc.checkOut(ctx, employee.id);
 
       const result = await investigationSvc.getAttendanceInvestigation(ctx, employee.id, START_DATE);
       expect(result.sessions).toHaveLength(1);
       expect(result.sessions[0]!.workDate).toBe(START_DATE);
-      expect(result.sessions[0]!.checkOutAt?.toISOString()).toBe("2033-08-17T06:00:00.000Z");
+      expect(result.sessions[0]!.checkOutAt?.toISOString()).toBe("2022-08-17T06:00:00.000Z");
       expect(result.record.status).not.toBe("UNPROCESSED");
     });
 
     it("16. schedule change between two sessions on the same day", async () => {
-      const WORK_DATE = "2033-08-18";
+      const WORK_DATE = "2022-08-18";
       const employee = await newEmployee();
       await workforceSvc.assignEmployeeSchedule(ctx, employee.id, { workScheduleId: daySchedule.id, effectiveFrom: ASSIGNMENT_START });
 
@@ -397,7 +397,7 @@ describe.skipIf(!available)("attendance investigation service", () => {
 
   describe("corrections", () => {
     it("17. approved correction is shown and its effect is reflected in the record", async () => {
-      const WORK_DATE = "2033-08-20";
+      const WORK_DATE = "2022-08-20";
       const employee = await newEmployee();
       await workforceSvc.assignEmployeeSchedule(ctx, employee.id, { workScheduleId: daySchedule.id, effectiveFrom: ASSIGNMENT_START });
 
@@ -405,6 +405,7 @@ describe.skipIf(!available)("attendance investigation service", () => {
       await attendanceSvc.checkIn(ctx, employee.id);
       await attendanceSvc.recalculateDailyRecord(ctx, employee.id, WORK_DATE); // materialize INCOMPLETE first
 
+      vi.setSystemTime(new Date(WORK_DATE + "T23:30:00Z")); // F-07-bump: a correction can only name a time that has already happened
       const correction = await attendanceSvc.requestCorrection(ctx, employee.id, {
         workDate: WORK_DATE,
         fieldChanged: "CHECK_OUT",
@@ -422,7 +423,7 @@ describe.skipIf(!available)("attendance investigation service", () => {
     });
 
     it("18. pending correction is shown, unreviewed", async () => {
-      const WORK_DATE = "2033-08-21";
+      const WORK_DATE = "2022-08-21";
       const employee = await newEmployee();
       await workforceSvc.assignEmployeeSchedule(ctx, employee.id, { workScheduleId: daySchedule.id, effectiveFrom: ASSIGNMENT_START });
 
@@ -434,6 +435,7 @@ describe.skipIf(!available)("attendance investigation service", () => {
       const checkInEvent = await db.query.attendanceEvents.findFirst({
         where: (t, { and, eq: dbEq }) => and(dbEq(t.employeeId, employee.id), dbEq(t.eventType, "CHECK_IN")),
       });
+      vi.setSystemTime(new Date(WORK_DATE + "T23:30:00Z")); // F-07-bump: a correction can only name a time that has already happened
       await attendanceSvc.requestCorrection(ctx, employee.id, {
         workDate: WORK_DATE,
         eventId: checkInEvent!.id,
@@ -449,7 +451,7 @@ describe.skipIf(!available)("attendance investigation service", () => {
     });
 
     it("19. rejected correction is shown, marked rejected", async () => {
-      const WORK_DATE = "2033-08-22";
+      const WORK_DATE = "2022-08-22";
       const employee = await newEmployee();
       await workforceSvc.assignEmployeeSchedule(ctx, employee.id, { workScheduleId: daySchedule.id, effectiveFrom: ASSIGNMENT_START });
 
@@ -461,6 +463,7 @@ describe.skipIf(!available)("attendance investigation service", () => {
       const checkOutEvent = await db.query.attendanceEvents.findFirst({
         where: (t, { and, eq: dbEq }) => and(dbEq(t.employeeId, employee.id), dbEq(t.eventType, "CHECK_OUT")),
       });
+      vi.setSystemTime(new Date(WORK_DATE + "T23:30:00Z")); // F-07-bump: a correction can only name a time that has already happened
       const correction = await attendanceSvc.requestCorrection(ctx, employee.id, {
         workDate: WORK_DATE,
         eventId: checkOutEvent!.id,
@@ -480,7 +483,7 @@ describe.skipIf(!available)("attendance investigation service", () => {
 
   describe("closed period", () => {
     it("20. closed period + existing record — returned unchanged, no write", async () => {
-      const MONTH = "2033-10";
+      const MONTH = "2022-10";
       const WORK_DATE = `${MONTH}-05`;
       const employee = await newEmployee();
       const oldCalculatedAt = new Date("2020-05-05T00:00:00Z");
@@ -507,7 +510,7 @@ describe.skipIf(!available)("attendance investigation service", () => {
     });
 
     it("21. closed period + no record — UNPROCESSED, zero writes across every attendance table", async () => {
-      const MONTH = "2033-11";
+      const MONTH = "2022-11";
       const WORK_DATE = `${MONTH}-06`;
       const employee = await newEmployee();
       await periodSvc.closeAttendancePeriod(ctx, MONTH);
@@ -545,7 +548,7 @@ describe.skipIf(!available)("attendance investigation service", () => {
     });
 
     it("23. archived employee — investigation remains readable", async () => {
-      const WORK_DATE = "2033-08-25";
+      const WORK_DATE = "2022-08-25";
       const employee = await newEmployee();
       await workforceSvc.assignEmployeeSchedule(ctx, employee.id, { workScheduleId: daySchedule.id, effectiveFrom: ASSIGNMENT_START });
       await db.update(schema.employees).set({ isArchived: true }).where(eq(schema.employees.id, employee.id));
@@ -556,14 +559,14 @@ describe.skipIf(!available)("attendance investigation service", () => {
 
     it("24. not-yet-joined employee — investigation still succeeds for a date before joining", async () => {
       const employee = await newEmployee({ dateOfJoining: "2040-01-01" });
-      const result = await investigationSvc.getAttendanceInvestigation(ctx, employee.id, "2033-08-26");
+      const result = await investigationSvc.getAttendanceInvestigation(ctx, employee.id, "2022-08-26");
       expect(result).toBeDefined();
     });
   });
 
   describe("25. tenant isolation", () => {
     it("a user from another company cannot investigate company A's employee, and nothing leaks", async () => {
-      const WORK_DATE = "2033-08-27";
+      const WORK_DATE = "2022-08-27";
       const employee = await newEmployee();
 
       await expect(investigationSvc.getAttendanceInvestigation(ctxCompanyB, employee.id, WORK_DATE)).rejects.toThrow(AuthorizationError);
@@ -572,14 +575,14 @@ describe.skipIf(!available)("attendance investigation service", () => {
 
   describe("26. RBAC and self-scope", () => {
     it("MANAGER and HR_MANAGER (existing attendance.view/employee.view holders) can investigate", async () => {
-      const WORK_DATE = "2033-08-28";
+      const WORK_DATE = "2022-08-28";
       const employee = await newEmployee();
       await expect(investigationSvc.getAttendanceInvestigation(ctxManager, employee.id, WORK_DATE)).resolves.toBeDefined();
       await expect(investigationSvc.getAttendanceInvestigation(ctxHrManager, employee.id, WORK_DATE)).resolves.toBeDefined();
     });
 
     it("an EMPLOYEE caller always resolves to their own record, never a requested other employee's", async () => {
-      const WORK_DATE = "2033-08-29";
+      const WORK_DATE = "2022-08-29";
       const self = await newEmployee();
       const other = await newEmployee();
       const ctxSelf = await makeEmployeeCtx(self.id);

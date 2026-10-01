@@ -199,6 +199,7 @@ describe.skipIf(!available)("attendance dashboard", () => {
     await svc.checkOut(ctx, employeeNoScheduleId);
 
     // Holiday: no check-in at all — explicit HR recalculation (a read no longer persists anything).
+    vi.setSystemTime(new Date(`${HOLIDAY_DATE}T23:00:00Z`)); // F-07: a day can only be recalculated once it has begun
     await svc.recalculateDailyRecord(ctx, employeeHolidayId, HOLIDAY_DATE);
 
     vi.setSystemTime(new Date(`${HOLIDAY_DATE}T09:00:00Z`));
@@ -206,6 +207,7 @@ describe.skipIf(!available)("attendance dashboard", () => {
     vi.setSystemTime(new Date(`${HOLIDAY_DATE}T13:00:00Z`));
     await svc.checkOut(ctx, employeeHolidayWorkedId);
 
+    vi.setSystemTime(new Date(`${WEEKLY_OFF_DATE}T23:00:00Z`));
     await svc.recalculateDailyRecord(ctx, employeeWeeklyOffId, WEEKLY_OFF_DATE);
 
     vi.setSystemTime(new Date(`${WEEKLY_OFF_DATE}T09:00:00Z`));

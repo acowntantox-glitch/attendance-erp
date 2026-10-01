@@ -113,6 +113,13 @@
       "when": 1790760198707,
       "tag": "0015_massive_celestials",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1790840866356,
+      "tag": "0016_attendance_policy_effective_from",
+      "breakpoints": true
     }
   ]
 }

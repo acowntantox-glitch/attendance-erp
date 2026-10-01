@@ -4,8 +4,8 @@ import { ValidationError } from "@/lib/errors";
 import { getRequestContext } from "@/lib/auth/request-context";
 import { getAttendanceDashboard } from "@/domains/attendance/service";
 import type { AttendanceDailyStatus } from "@/domains/attendance/model";
+import { dateSchema } from "@/validations/attendance";
 
-const dateParam = /^\d{4}-\d{2}-\d{2}$/;
 const VALID_STATUSES = new Set(attendanceDailyStatusEnum.enumValues);
 
 /** The HR/Manager attendance dashboard's single read query — summary counts, currently-working,
@@ -19,8 +19,8 @@ export const GET = withApiHandler(async (_requestId, request: Request) => {
   const params = url.searchParams;
 
   const date = params.get("date");
-  if (!date || !dateParam.test(date)) {
-    throw new ValidationError("Query param 'date' (YYYY-MM-DD) is required.");
+  if (!date || !dateSchema.safeParse(date).success) {
+    throw new ValidationError("Query param 'date' (a real YYYY-MM-DD date) is required.");
   }
 
   const statusParam = params.get("status");

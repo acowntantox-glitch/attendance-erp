@@ -18,6 +18,7 @@ import { AttendanceDashboardTable } from "@/components/attendance/dashboard/atte
 import { RecentProcessingRuns } from "@/components/attendance/dashboard/recent-processing-runs";
 import type { AttendanceDailyStatus } from "@/domains/attendance/model";
 import { PageHeader } from "@/components/ui/page-header";
+import { dateSchema } from "@/validations/attendance";
 
 type SearchParams = {
   date?: string;
@@ -29,7 +30,6 @@ type SearchParams = {
   status?: string;
 };
 
-const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
  * HR/Manager attendance dashboard — a read-only presentation layer over the Batch 1 Attendance
@@ -61,7 +61,7 @@ export default async function AttendanceDashboardPage({ searchParams }: { search
 
   const params = await searchParams;
   const today = new Date().toISOString().slice(0, 10);
-  const date = params.date && DATE_PATTERN.test(params.date) && params.date <= today ? params.date : today;
+  const date = params.date && dateSchema.safeParse(params.date).success && params.date <= today ? params.date : today;
 
   const [result, departments, branches, periodClosed] = await Promise.all([
     getAttendanceDashboard(ctx, {
