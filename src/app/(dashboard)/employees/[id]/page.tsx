@@ -44,6 +44,9 @@ export default async function EmployeeProfilePage({ params }: { params: Promise<
 
   const canEdit = can(ctx.role, "employee.update");
   const canManageDocuments = can(ctx.role, "employee.manage_documents");
+  // Same rule as assertCanAccessEmployeeDocuments: the employee themself, or a role with employee.view_documents.
+  // Computed here so a role without it (e.g. MANAGER) never calls the document service and the page still loads.
+  const canViewDocuments = (employee.userId !== null && employee.userId === ctx.userId) || can(ctx.role, "employee.view_documents");
   const canCreateAssignment = can(ctx.role, "employee_schedule.create");
   const canViewCompanyWeeklyOffDefault = can(ctx.role, "weekly_off.view");
   const canManageWeeklyOffOverride = can(ctx.role, "weekly_off.create");
@@ -52,7 +55,7 @@ export default async function EmployeeProfilePage({ params }: { params: Promise<
     await Promise.all([
       listEmployeeHistory(ctx, id),
       getOnboarding(ctx, id),
-      listEmployeeDocuments(ctx, id),
+      canViewDocuments ? listEmployeeDocuments(ctx, id) : Promise.resolve([]),
       listEmployeeScheduleAssignments(ctx, id),
       getEmployeeWeeklyOffOverride(ctx, id),
       canViewCompanyWeeklyOffDefault ? getCompanyDefaultWeeklyOff(ctx) : Promise.resolve(null),
@@ -91,7 +94,7 @@ export default async function EmployeeProfilePage({ params }: { params: Promise<
       <Tabs defaultValue="overview">
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="documents">Documents</TabsTrigger>
+          {canViewDocuments && <TabsTrigger value="documents">Documents</TabsTrigger>}
           <TabsTrigger value="history">History</TabsTrigger>
           <TabsTrigger value="onboarding">Onboarding</TabsTrigger>
           <TabsTrigger value="workforce">Workforce</TabsTrigger>
@@ -151,16 +154,18 @@ export default async function EmployeeProfilePage({ params }: { params: Promise<
           </div>
         </TabsContent>
 
-        <TabsContent value="documents">
-          <Card>
-            <CardHeader>
-              <CardTitle>Documents</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <EmployeeDocumentsPanel employeeId={employee.id} documents={documents} canManage={canManageDocuments} />
-            </CardContent>
-          </Card>
-        </TabsContent>
+        {canViewDocuments && (
+          <TabsContent value="documents">
+            <Card>
+              <CardHeader>
+                <CardTitle>Documents</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <EmployeeDocumentsPanel employeeId={employee.id} documents={documents} canManage={canManageDocuments} />
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
 
         <TabsContent value="history">
           <Card>

@@ -189,25 +189,24 @@ describe.skipIf(!available)("attendance dashboard", () => {
 
     vi.setSystemTime(new Date(`${DATE}T09:00:00Z`));
     await svc.checkIn(ctx, employeeIncompleteId); // never checked out
-    // Only checkOut/getAttendanceDay trigger recalculation — without this, no daily record would
-    // exist at all for this employee on this date (proving the point, but not what this fixture
-    // needs), so explicitly trigger it the same way an HR view of the day would.
-    await svc.getAttendanceDay(ctx, employeeIncompleteId, DATE);
+    // F-01 — check-in never creates a daily record and a read never writes one, so this fixture needs
+    // the explicit HR recalculation to put an INCOMPLETE record in place.
+    await svc.recalculateDailyRecord(ctx, employeeIncompleteId, DATE);
 
     vi.setSystemTime(new Date(`${DATE}T09:00:00Z`));
     await svc.checkIn(ctx, employeeNoScheduleId);
     vi.setSystemTime(new Date(`${DATE}T13:00:00Z`));
     await svc.checkOut(ctx, employeeNoScheduleId);
 
-    // Holiday: no check-in at all — trigger computation the same way a real HR view would.
-    await svc.getAttendanceDay(ctx, employeeHolidayId, HOLIDAY_DATE);
+    // Holiday: no check-in at all — explicit HR recalculation (a read no longer persists anything).
+    await svc.recalculateDailyRecord(ctx, employeeHolidayId, HOLIDAY_DATE);
 
     vi.setSystemTime(new Date(`${HOLIDAY_DATE}T09:00:00Z`));
     await svc.checkIn(ctx, employeeHolidayWorkedId);
     vi.setSystemTime(new Date(`${HOLIDAY_DATE}T13:00:00Z`));
     await svc.checkOut(ctx, employeeHolidayWorkedId);
 
-    await svc.getAttendanceDay(ctx, employeeWeeklyOffId, WEEKLY_OFF_DATE);
+    await svc.recalculateDailyRecord(ctx, employeeWeeklyOffId, WEEKLY_OFF_DATE);
 
     vi.setSystemTime(new Date(`${WEEKLY_OFF_DATE}T09:00:00Z`));
     await svc.checkIn(ctx, employeeWeeklyOffWorkedId);

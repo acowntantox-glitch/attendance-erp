@@ -28,6 +28,8 @@ export function TodayAttendanceCard({
   referenceSession: AttendanceSessionView | null;
 }) {
   const isUnprocessed = record.status === "UNPROCESSED";
+  // No stored record yet: the figures below are calculated live and are not a recorded status.
+  const isProvisional = record.id === null && !isUnprocessed;
   const isDayOff = record.status === "HOLIDAY" || record.status === "WEEKLY_OFF";
   const isNoSchedule = record.status === "NO_SCHEDULE";
 
@@ -35,13 +37,24 @@ export function TodayAttendanceCard({
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle>{formatDateLabel(workDate)}</CardTitle>
-        {isUnprocessed ? <Badge variant="neutral">Not Yet Processed</Badge> : <AttendanceStatusBadge status={record.status} />}
+        {isUnprocessed ? (
+          <Badge variant="neutral">Not Yet Processed</Badge>
+        ) : isProvisional ? (
+          <Badge variant="neutral">Not Yet Recorded</Badge>
+        ) : (
+          <AttendanceStatusBadge status={record.status} />
+        )}
       </CardHeader>
       <CardContent className="space-y-5">
         {isUnprocessed && (
           <p className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-600">
             This month&apos;s attendance period is closed and this day was never processed, so no totals are available. Reopen the
             period first if this needs to be computed.
+          </p>
+        )}
+        {isProvisional && (
+          <p className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-600">
+            Today&apos;s figures are provisional. They are recorded when you check out or when the day is processed.
           </p>
         )}
         {isDayOff && (
@@ -88,7 +101,7 @@ export function TodayAttendanceCard({
           <Stat label="Overtime" value={formatMinutesOrNull(record.overtimeMinutes)} />
         </dl>
 
-        {record.status === "INCOMPLETE" && (
+        {record.status === "INCOMPLETE" && !isProvisional && (
           <p role="alert" className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
             A previous session on this day has no check-out yet. Worked/overtime figures are pending until it&apos;s closed.
           </p>

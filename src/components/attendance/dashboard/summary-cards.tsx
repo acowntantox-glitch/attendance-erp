@@ -35,8 +35,8 @@ export function SummaryCards({ summary }: { summary: AttendanceDashboardSummary 
       </div>
       {summary.employeesWithoutRecord > 0 && (
         <p className="text-xs text-slate-500">
-          {summary.employeesWithoutRecord} employee{summary.employeesWithoutRecord === 1 ? "" : "s"} have no attendance record computed for
-          this date yet (no check-in, and their day hasn&apos;t been viewed) — not counted in any status above.
+          {summary.employeesWithoutRecord} employee{summary.employeesWithoutRecord === 1 ? "" : "s"} have no daily attendance record for this
+          date yet (the day has not been processed, or they are still working) — not counted in any status above.
         </p>
       )}
     </div>

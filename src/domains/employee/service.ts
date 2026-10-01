@@ -557,8 +557,10 @@ async function assertCanAccessEmployeeDocuments(ctx: RequestContext, employeeId:
   const employee = await employeeRepository.findById(employeeId);
   if (!employee) throw new EmployeeNotFoundError();
   assertCompanyAccess(ctx, employee.companyId);
+  // Self-access stays open; anyone else needs the dedicated document-view permission. `employee.view`
+  // is deliberately NOT enough (a manager holds it) — documents are HR-only until team scoping exists.
   if (!isSelf(ctx, employee)) {
-    requirePermission(ctx, "employee.view");
+    requirePermission(ctx, "employee.view_documents");
   }
   return employee;
 }

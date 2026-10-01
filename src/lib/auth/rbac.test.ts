@@ -19,6 +19,18 @@ describe("rbac", () => {
     }
   });
 
+  it("F-03: employee.view_documents is HR/admin-only - MANAGER and EMPLOYEE do not hold it, even though MANAGER holds employee.view", () => {
+    for (const role of ["SUPER_ADMIN", "COMPANY_ADMIN", "HR_ADMIN", "HR_MANAGER"] as const) {
+      expect(can(role, "employee.view_documents")).toBe(true);
+    }
+    expect(can("MANAGER", "employee.view")).toBe(true);
+    expect(can("MANAGER", "employee.view_documents")).toBe(false);
+    expect(can("EMPLOYEE", "employee.view_documents")).toBe(false);
+    // Upload/archive stay on the existing permission.
+    expect(can("MANAGER", "employee.manage_documents")).toBe(false);
+    expect(can("HR_MANAGER", "employee.manage_documents")).toBe(true);
+  });
+
   it("does not grant MANAGER user management", () => {
     expect(can("MANAGER", "user.manage")).toBe(false);
   });

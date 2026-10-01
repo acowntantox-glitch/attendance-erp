@@ -1404,6 +1404,308 @@ describe.skipIf(!available)("attendance service", () => {
     });
   });
 
+  // F-01 — a stored daily record must never contradict the attendance state behind it, a read must never
+  // write one, and every writer takes the same per-(employee, work date) lock.
+  describe("daily record consistency", () => {
+    let consistencyScheduleId: string;
+    let seq = 0;
+
+    beforeAll(async () => {
+      const schedule = await workforceSvc.createWorkSchedule(ctx, { name: `AttConsistency-${Date.now()}`, startTime: "09:00:00", endTime: "18:00:00" });
+      consistencyScheduleId = schedule.id;
+    });
+
+    async function newScheduledEmployee() {
+      seq += 1;
+      const employee = await employeeService.createEmployee(ctx, {
+        firstName: "Consistency",
+        lastName: `E${seq}-${Date.now()}`,
+        workEmail: `att-consistency-${seq}-${Date.now()}@test.local`,
+        dateOfJoining: "2020-01-01",
+        locationId: branchId,
+      });
+      await workforceSvc.assignEmployeeSchedule(ctx, employee.id, { workScheduleId: consistencyScheduleId, effectiveFrom: ASSIGNMENT_START });
+      return employee.id;
+    }
+
+    async function storedRecord(employeeId: string, workDate: string) {
+      return db.query.attendanceDailyRecords.findFirst({
+        where: and(eq(schema.attendanceDailyRecords.employeeId, employeeId), eq(schema.attendanceDailyRecords.workDate, workDate)),
+      });
+    }
+
+    const at = (iso: string) => vi.setSystemTime(new Date(iso));
+
+    it("1. GET before check-in, then check-in: no daily row exists at any point until check-out", async () => {
+      const id = await newScheduledEmployee();
+      const D = "2026-07-01";
+
+      at(`${D}T08:00:00Z`);
+      const before = await svc.getAttendanceDay(ctx, id, D);
+      expect(before.record.id).toBeNull();
+      expect(await storedRecord(id, D)).toBeUndefined();
+
+      at(`${D}T09:00:00Z`);
+      await svc.checkIn(ctx, id);
+      expect(await storedRecord(id, D)).toBeUndefined(); // check-in does not create a row
+
+      at(`${D}T10:00:00Z`);
+      const working = await svc.getAttendanceDay(ctx, id, D);
+      expect(working.record.id).toBeNull(); // still provisional, never persisted by the read
+      expect(working.record.sessionCount).toBe(1);
+      expect(await storedRecord(id, D)).toBeUndefined();
+
+      at(`${D}T18:00:00Z`);
+      await svc.checkOut(ctx, id);
+      const final = await storedRecord(id, D);
+      expect(final?.status).toBe("PRESENT");
+      expect(final?.sessionCount).toBe(1);
+    });
+
+    it("2. an existing HR-created row is refreshed by check-in (never left as ABSENT)", async () => {
+      const id = await newScheduledEmployee();
+      const D = "2026-07-02";
+
+      at(`${D}T08:00:00Z`);
+      const early = await svc.recalculateDailyRecord(ctx, id, D);
+      expect(early.status).toBe("ABSENT");
+      expect(early.sessionCount).toBe(0);
+
+      at(`${D}T09:00:00Z`);
+      await svc.checkIn(ctx, id);
+      const refreshed = await storedRecord(id, D);
+      expect(refreshed?.sessionCount).toBe(1);
+      expect(refreshed?.status).toBe("INCOMPLETE");
+      expect(refreshed?.firstCheckInAt?.toISOString()).toBe(`${D}T09:00:00.000Z`);
+
+      at(`${D}T18:00:00Z`);
+      await svc.checkOut(ctx, id);
+    });
+
+    it("3. break start/end keep an existing row consistent (and create none when there is none)", async () => {
+      const withRow = await newScheduledEmployee();
+      const withoutRow = await newScheduledEmployee();
+      const D = "2026-07-03";
+
+      at(`${D}T08:00:00Z`);
+      await svc.recalculateDailyRecord(ctx, withRow, D);
+      at(`${D}T09:00:00Z`);
+      await svc.checkIn(ctx, withRow);
+      await svc.checkIn(ctx, withoutRow);
+
+      at(`${D}T13:00:00Z`);
+      await svc.startBreak(ctx, withRow);
+      await svc.startBreak(ctx, withoutRow);
+      expect((await storedRecord(withRow, D))?.breakMinutes).toBe(0); // open break is not counted yet
+
+      at(`${D}T13:30:00Z`);
+      await svc.endBreak(ctx, withRow);
+      await svc.endBreak(ctx, withoutRow);
+      const row = await storedRecord(withRow, D);
+      expect(row?.breakMinutes).toBe(30);
+      expect(row?.sessionCount).toBe(1);
+      expect(await storedRecord(withoutRow, D)).toBeUndefined();
+
+      at(`${D}T18:00:00Z`);
+      await svc.checkOut(ctx, withRow);
+      await svc.checkOut(ctx, withoutRow);
+      expect((await storedRecord(withRow, D))?.workedMinutes).toBe(510);
+      expect((await storedRecord(withoutRow, D))?.workedMinutes).toBe(510);
+    });
+
+    it("4. session 1 closes, session 2 checks in and stays open: the record is not left as stale PRESENT", async () => {
+      const id = await newScheduledEmployee();
+      const D = "2026-07-04";
+
+      at(`${D}T09:00:00Z`);
+      await svc.checkIn(ctx, id);
+      at(`${D}T12:00:00Z`);
+      await svc.checkOut(ctx, id);
+      expect((await storedRecord(id, D))?.status).toBe("PRESENT");
+
+      at(`${D}T13:00:00Z`);
+      await svc.checkIn(ctx, id); // same work date, still open
+      const row = await storedRecord(id, D);
+      expect(row?.sessionCount).toBe(2);
+      expect(row?.status).toBe("INCOMPLETE");
+      expect(row?.workedMinutes).toBeNull();
+
+      at(`${D}T17:00:00Z`);
+      await svc.checkOut(ctx, id);
+      expect((await storedRecord(id, D))?.status).not.toBe("INCOMPLETE");
+    });
+
+    it("5. a forgotten check-out leaves no premature row, and the scheduled job later materializes INCOMPLETE", async () => {
+      const id = await newScheduledEmployee();
+      const D = "2026-07-05";
+      const auto = await import("../processing/attendance-auto-processing.service");
+
+      at(`${D}T09:00:00Z`);
+      await svc.checkIn(ctx, id);
+      at(`${D}T10:00:00Z`);
+      await svc.getAttendanceDay(ctx, id, D);
+      expect(await storedRecord(id, D)).toBeUndefined();
+
+      at(`${D}T23:30:00Z`);
+      await auto.processCompanyWorkDate(companyAId, D, "SCHEDULED");
+      const row = await storedRecord(id, D);
+      expect(row?.status).toBe("INCOMPLETE");
+      expect(row?.sessionCount).toBe(1);
+      expect(row?.workedMinutes).toBeNull();
+    });
+
+    it("6. a next-day check-in refreshes the abandoned session's existing record (and creates none for either day)", async () => {
+      const id = await newScheduledEmployee();
+      const D1 = "2026-07-06";
+      const D2 = "2026-07-07";
+
+      at(`${D1}T09:00:00Z`);
+      await svc.checkIn(ctx, id); // forgotten check-out
+      at(`${D1}T20:00:00Z`);
+      const hr = await svc.recalculateDailyRecord(ctx, id, D1);
+      expect(hr.status).toBe("INCOMPLETE");
+      expect(hr.calculatedAt.toISOString()).toBe(`${D1}T20:00:00.000Z`);
+
+      at(`${D2}T09:00:00Z`);
+      await svc.checkIn(ctx, id); // abandons D1's session
+      const refreshed = await storedRecord(id, D1);
+      expect(refreshed?.calculatedAt.toISOString()).toBe(`${D2}T09:00:00.000Z`); // recalculated by the abandon
+      expect(await storedRecord(id, D2)).toBeUndefined(); // nothing created for the new day
+
+      at(`${D2}T18:00:00Z`);
+      await svc.checkOut(ctx, id);
+    });
+
+    it("6b. abandoning a session whose month is CLOSED leaves its existing record untouched", async () => {
+      const id = await newScheduledEmployee();
+      const D1 = "2026-08-31";
+      const D2 = "2026-09-01";
+
+      at(`${D1}T09:00:00Z`);
+      await svc.checkIn(ctx, id);
+      at(`${D1}T20:00:00Z`);
+      await svc.recalculateDailyRecord(ctx, id, D1);
+      // A closed period can't coexist with an OPEN session through the service (close is refused), so
+      // freeze the month directly: this is the "preserve closed-period behaviour" edge.
+      await db.insert(schema.attendancePeriods).values({ companyId: companyAId, periodMonth: "2026-08", status: "CLOSED" }).onConflictDoUpdate({
+        target: [schema.attendancePeriods.companyId, schema.attendancePeriods.periodMonth],
+        set: { status: "CLOSED" },
+      });
+      try {
+        at(`${D2}T09:00:00Z`);
+        await svc.checkIn(ctx, id);
+        expect((await storedRecord(id, D1))?.calculatedAt.toISOString()).toBe(`${D1}T20:00:00.000Z`);
+      } finally {
+        await db
+          .update(schema.attendancePeriods)
+          .set({ status: "OPEN" })
+          .where(and(eq(schema.attendancePeriods.companyId, companyAId), eq(schema.attendancePeriods.periodMonth, "2026-08")));
+      }
+      at(`${D2}T18:00:00Z`);
+      await svc.checkOut(ctx, id);
+    });
+
+    it("7. manual recalculation after check-in reflects the open session", async () => {
+      const id = await newScheduledEmployee();
+      const D = "2026-07-08";
+
+      at(`${D}T09:00:00Z`);
+      await svc.checkIn(ctx, id);
+      at(`${D}T11:00:00Z`);
+      const record = await svc.recalculateDailyRecord(ctx, id, D);
+      expect(record.status).toBe("INCOMPLETE");
+      expect(record.sessionCount).toBe(1);
+      expect((await storedRecord(id, D))?.id).toBe(record.id);
+
+      at(`${D}T18:00:00Z`);
+      await svc.checkOut(ctx, id);
+    });
+
+    it("8. correction approval after check-in creates and calculates the record", async () => {
+      const id = await newScheduledEmployee();
+      const D = "2026-07-09";
+
+      at(`${D}T09:00:00Z`);
+      await svc.checkIn(ctx, id); // forgot to check out
+      expect(await storedRecord(id, D)).toBeUndefined();
+
+      const correction = await svc.requestCorrection(ctx, id, {
+        workDate: D,
+        fieldChanged: "CHECK_OUT",
+        correctedValue: new Date(`${D}T18:00:00Z`),
+        reason: "Forgot to check out",
+      });
+      await svc.approveCorrection(ctxReviewer, correction.id, { reviewNote: "ok" });
+
+      const row = await storedRecord(id, D);
+      expect(row?.status).toBe("PRESENT");
+      expect(row?.workedMinutes).toBe(540);
+    });
+
+    it("9. + 10. a check-out whose calculation fails rolls the whole punch back, and the retry succeeds", async () => {
+      const id = await newScheduledEmployee();
+      const D = "2026-07-11";
+      const repo = await import("../repository");
+
+      at(`${D}T09:00:00Z`);
+      await svc.checkIn(ctx, id);
+      at(`${D}T18:00:00Z`);
+
+      const spy = vi.spyOn(repo.attendanceDailyRecordRepository, "upsert").mockRejectedValueOnce(new Error("simulated calculation write failure"));
+      await expect(svc.checkOut(ctx, id)).rejects.toThrow("simulated calculation write failure");
+      spy.mockRestore();
+
+      // Complete rollback: session still OPEN, no CHECK_OUT event, no daily record.
+      const { session } = await svc.getCurrentSession(ctx, id);
+      expect(session?.status).toBe("OPEN");
+      expect(session?.checkOutAt).toBeNull();
+      const events = await db.query.attendanceEvents.findMany({ where: eq(schema.attendanceEvents.employeeId, id) });
+      expect(events.map((e) => e.eventType)).toEqual(["CHECK_IN"]);
+      expect(await storedRecord(id, D)).toBeUndefined();
+
+      // Retry: succeeds and leaves a consistent record.
+      const closed = await svc.checkOut(ctx, id);
+      expect(closed.status).toBe("CLOSED");
+      const row = await storedRecord(id, D);
+      expect(row?.status).toBe("PRESENT");
+      expect(row?.sessionCount).toBe(1);
+    });
+
+    it("concurrency: check-in racing a recalculation always leaves the stored row consistent with the session", async () => {
+      const id = await newScheduledEmployee();
+      for (const D of ["2026-07-13", "2026-07-14", "2026-07-15", "2026-07-16", "2026-07-17"]) {
+        at(`${D}T08:00:00Z`);
+        await svc.recalculateDailyRecord(ctx, id, D); // an existing (ABSENT) row
+        at(`${D}T09:00:00Z`);
+        const results = await Promise.allSettled([svc.checkIn(ctx, id), svc.recalculateDailyRecord(ctx, id, D)]);
+        expect(results.every((r) => r.status === "fulfilled")).toBe(true);
+
+        const row = await storedRecord(id, D);
+        expect(row?.sessionCount).toBe(1);
+        expect(row?.status).toBe("INCOMPLETE");
+
+        at(`${D}T18:00:00Z`);
+        await svc.checkOut(ctx, id);
+      }
+    });
+
+    it("concurrency: a GET racing a check-in / check-out can never persist or overwrite anything", async () => {
+      const id = await newScheduledEmployee();
+      const D = "2026-07-20";
+
+      at(`${D}T09:00:00Z`);
+      await Promise.all([svc.checkIn(ctx, id), svc.getAttendanceDay(ctx, id, D), svc.getAttendanceDay(ctx, id, D)]);
+      expect(await storedRecord(id, D)).toBeUndefined(); // the GETs wrote nothing, whatever the interleaving
+
+      at(`${D}T18:00:00Z`);
+      await Promise.all([svc.checkOut(ctx, id), svc.getAttendanceDay(ctx, id, D), svc.getAttendanceDay(ctx, id, D), svc.getAttendanceDay(ctx, id, D)]);
+      const row = await storedRecord(id, D);
+      expect(row?.status).toBe("PRESENT"); // not overwritten by a GET's stale ABSENT
+      expect(row?.sessionCount).toBe(1);
+      expect(row?.workedMinutes).toBe(540);
+    });
+  });
+
   describe("recalculation", () => {
     it("recalculateDailyRecord recomputes and persists the same figures getAttendanceDay would compute", async () => {
       vi.setSystemTime(new Date("2026-06-10T09:00:00Z"));

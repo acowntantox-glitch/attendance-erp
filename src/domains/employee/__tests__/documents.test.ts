@@ -1,8 +1,25 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import { isDatabaseAvailable } from "../../../tests/setup/db";
 
 const available = await isDatabaseAvailable();
+
+// The F-03 route test cold-imports two route modules (and their dependency graph) on top of real-Postgres
+// round trips - same class of timing as the attendance integration suites that widen this.
+vi.setConfig({ testTimeout: 20_000, hookTimeout: 20_000 });
+
+// The route handlers resolve the caller via getRequestContext(); everything else in request-context
+// (requirePermission, assertCompanyAccess) stays real so the services authorize exactly as in production.
+const reqCtx = vi.hoisted(() => ({ current: null as unknown }));
+vi.mock("@/lib/auth/request-context", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/auth/request-context")>()),
+  getRequestContext: async () => reqCtx.current,
+}));
+// No real bucket exists: getObjectStream passes through (fails closed, StorageNotConfiguredError) unless a test stubs it.
+vi.mock("@/lib/storage", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/storage")>();
+  return { ...actual, getObjectStream: vi.fn(actual.getObjectStream) };
+});
 
 /**
  * No real S3 bucket exists yet (see src/lib/storage), so `initiateEmployeeDocumentUpload` and
@@ -235,5 +252,137 @@ describe.skipIf(!available)("employee documents", () => {
     );
 
     await db.delete(schema.companies).where(eq(schema.companies.id, otherCompany!.id));
+  });
+
+  // ---------------------------------------------------------------------------------------------
+  // F-03 - non-self document access needs employee.view_documents (HR-only). MANAGER holds
+  // employee.view but is deliberately denied until team scoping exists (F-02).
+  // ---------------------------------------------------------------------------------------------
+  describe("F-03 document authorization", () => {
+    let storageModule: typeof import("@/lib/storage");
+    let hrAdminCtx: import("@/lib/auth/request-context").RequestContext;
+    let hrManagerCtx: import("@/lib/auth/request-context").RequestContext;
+    let subjectDocumentId: string;
+    let selfDocumentId: string;
+
+    const fakeStream = () => ({ body: new ReadableStream(), contentType: "application/pdf", contentLength: 1 });
+
+    async function newDocument(forEmployeeId: string, title: string) {
+      const doc = await repository.employeeDocumentRepository.create({
+        companyId,
+        employeeId: forEmployeeId,
+        documentType: "PASSPORT",
+        title,
+        storageKey: `test/f03/${title}`,
+        originalFilename: `${title}.pdf`,
+        mimeType: "application/pdf",
+        sizeBytes: 100,
+      });
+      return doc.id;
+    }
+
+    beforeAll(async () => {
+      storageModule = await import("@/lib/storage");
+      hrAdminCtx = { ...adminCtx, requestId: "doc-test-hr-admin", role: "HR_ADMIN" };
+      hrManagerCtx = { ...adminCtx, requestId: "doc-test-hr-manager", role: "HR_MANAGER" };
+      subjectDocumentId = await newDocument(employeeId, "f03-subject");
+      selfDocumentId = await newDocument(selfEmployeeId, "f03-self");
+    });
+
+    it("a MANAGER cannot list another employee's documents", async () => {
+      await expect(service.listEmployeeDocuments(managerCtx, employeeId)).rejects.toBeInstanceOf(AuthorizationError);
+    });
+
+    it("a MANAGER cannot download, and storage is never touched", async () => {
+      const spy = vi.mocked(storageModule.getObjectStream);
+      spy.mockClear();
+      await expect(service.getEmployeeDocumentDownload(managerCtx, employeeId, subjectDocumentId)).rejects.toBeInstanceOf(AuthorizationError);
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it("a MANAGER cannot upload or archive", async () => {
+      await expect(
+        service.initiateEmployeeDocumentUpload(managerCtx, employeeId, { documentType: "OTHER", title: "x", originalFilename: "x.pdf", mimeType: "application/pdf", sizeBytes: 10 }),
+      ).rejects.toBeInstanceOf(AuthorizationError);
+      await expect(service.archiveEmployeeDocument(managerCtx, employeeId, subjectDocumentId)).rejects.toBeInstanceOf(AuthorizationError);
+    });
+
+    it.each([
+      ["HR_ADMIN", () => hrAdminCtx],
+      ["HR_MANAGER", () => hrManagerCtx],
+    ])("%s can list and download", async (_role, getCtx) => {
+      const hrCtx = getCtx();
+      const listed = await service.listEmployeeDocuments(hrCtx, employeeId);
+      expect(listed.some((d) => d.id === subjectDocumentId)).toBe(true);
+
+      vi.mocked(storageModule.getObjectStream).mockResolvedValueOnce(fakeStream());
+      const download = await service.getEmployeeDocumentDownload(hrCtx, employeeId, subjectDocumentId);
+      expect(download.filename).toBe("f03-subject.pdf");
+    });
+
+    it("an employee can list and download their own documents, but cannot upload or archive", async () => {
+      const listed = await service.listEmployeeDocuments(selfCtx, selfEmployeeId);
+      expect(listed.some((d) => d.id === selfDocumentId)).toBe(true);
+
+      vi.mocked(storageModule.getObjectStream).mockResolvedValueOnce(fakeStream());
+      const download = await service.getEmployeeDocumentDownload(selfCtx, selfEmployeeId, selfDocumentId);
+      expect(download.filename).toBe("f03-self.pdf");
+
+      await expect(
+        service.initiateEmployeeDocumentUpload(selfCtx, selfEmployeeId, { documentType: "OTHER", title: "x", originalFilename: "x.pdf", mimeType: "application/pdf", sizeBytes: 10 }),
+      ).rejects.toBeInstanceOf(AuthorizationError);
+      await expect(service.archiveEmployeeDocument(selfCtx, selfEmployeeId, selfDocumentId)).rejects.toBeInstanceOf(AuthorizationError);
+    });
+
+    it("company isolation is unchanged: another company's HR_ADMIN cannot list or download", async () => {
+      const [otherCompany] = await db.insert(schema.companies).values({ name: "F03 Other Co", code: `DOC_F03_${Date.now()}` }).returning();
+      try {
+        const otherHr = { ...hrAdminCtx, companyId: otherCompany!.id, requestId: "doc-test-other-hr" };
+        await expect(service.listEmployeeDocuments(otherHr, employeeId)).rejects.toBeInstanceOf(AuthorizationError);
+        await expect(service.getEmployeeDocumentDownload(otherHr, employeeId, subjectDocumentId)).rejects.toBeInstanceOf(AuthorizationError);
+      } finally {
+        await db.delete(schema.companies).where(eq(schema.companies.id, otherCompany!.id));
+      }
+    });
+
+    it("a download is still audited as employee.document_download (actor, entity), and a denied one is not", async () => {
+      vi.mocked(storageModule.getObjectStream).mockResolvedValueOnce(fakeStream());
+      await service.getEmployeeDocumentDownload(hrAdminCtx, employeeId, subjectDocumentId);
+      const logs = await db.query.auditLogs.findMany({ where: eq(schema.auditLogs.entityId, subjectDocumentId) });
+      const downloads = logs.filter((l) => l.action === "employee.document_download");
+      expect(downloads.length).toBeGreaterThanOrEqual(1);
+      expect(downloads.every((l) => l.actorUserId === adminUserId && l.companyId === companyId)).toBe(true);
+
+      const before = downloads.length;
+      await expect(service.getEmployeeDocumentDownload(managerCtx, employeeId, subjectDocumentId)).rejects.toBeInstanceOf(AuthorizationError);
+      const after = (await db.query.auditLogs.findMany({ where: eq(schema.auditLogs.entityId, subjectDocumentId) })).filter(
+        (l) => l.action === "employee.document_download",
+      ).length;
+      expect(after).toBe(before);
+    });
+
+    it("the API routes answer a MANAGER with the standard 403 envelope (list and download)", async () => {
+      const listRoute = await import("@/app/api/employees/[id]/documents/route");
+      const downloadRoute = await import("@/app/api/employees/[id]/documents/[documentId]/download/route");
+      reqCtx.current = managerCtx;
+      try {
+        const listResponse = await listRoute.GET(new Request("http://localhost/api/x"), { params: Promise.resolve({ id: employeeId }) });
+        expect(listResponse.status).toBe(403);
+        expect((await listResponse.json()).error.code).toBe("FORBIDDEN");
+
+        const downloadResponse = await downloadRoute.GET(new Request("http://localhost/api/x"), {
+          params: Promise.resolve({ id: employeeId, documentId: subjectDocumentId }),
+        });
+        expect(downloadResponse.status).toBe(403);
+        expect((await downloadResponse.json()).error.code).toBe("FORBIDDEN");
+
+        // ...and an HR caller through the very same route is allowed.
+        reqCtx.current = hrAdminCtx;
+        const hrResponse = await listRoute.GET(new Request("http://localhost/api/x"), { params: Promise.resolve({ id: employeeId }) });
+        expect(hrResponse.status).toBe(200);
+      } finally {
+        reqCtx.current = null;
+      }
+    });
   });
 });

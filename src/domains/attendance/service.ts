@@ -8,9 +8,11 @@ import { recordAuditLog } from "@/domains/audit/service";
 import { employeeRepository } from "@/domains/employee/repository";
 import { EmployeeNotFoundError } from "@/domains/employee/errors";
 import { getWorkforceDayInfo, resolveEmployeeTimezone, resolveWorkforceDayInfo } from "@/domains/workforce/service";
+import type { WorkforceDayInfo } from "@/domains/workforce/model";
 import { addDays, utcToZonedWallTime, zonedWallTimeToUtc } from "@/lib/datetime";
 import { applyCorrectionsToSessions, calculateDailyAttendance, closedBreakMinutes, diffMinutes } from "./calculation";
 import { assertAttendancePeriodOpen, isAttendancePeriodClosed } from "./periods/attendance-period.service";
+import { attendancePeriodRepository } from "./periods/attendance-period.repository";
 import { resolveAttendancePolicy } from "./policy/attendance-policy.service";
 import {
   attendanceCorrectionRepository,
@@ -18,10 +20,13 @@ import {
   attendanceDashboardRepository,
   attendanceEventRepository,
   attendanceSessionRepository,
+  lockAttendanceDay,
 } from "./repository";
 import {
   AlreadyCheckedInError,
+  AttendanceChangedConcurrentlyError,
   AttendanceCorrectionNotFoundError,
+  AttendancePeriodLockedError,
   ConflictingCorrectionError,
   CorrectionAlreadyReviewedError,
   DuplicateAttendanceEventError,
@@ -64,7 +69,7 @@ import type {
   ReviewCorrectionInput,
   RequestCorrectionInput,
 } from "./model";
-import type { DbExecutor } from "@/db/client";
+import type { DbExecutor, Transaction } from "@/db/client";
 
 async function loadEmployeeInCompany(ctx: RequestContext, employeeId: string) {
   const employee = await employeeRepository.findById(employeeId);
@@ -129,6 +134,51 @@ async function resolveCheckInContext(ctx: RequestContext, employeeId: string, ch
 // Check-in / check-out / breaks
 // ---------------------------------------------------------------------------
 
+// F-01 — keeping stored daily records consistent with attendance state changes.
+//
+// Invariant: an EXISTING daily record is recalculated, in the same transaction and under the same
+// per-(employee, work date) lock, by every state change (check-in, break start/end, check-out,
+// abandon). A record is only CREATED by check-out, an explicit HR recalculation/Process Day, a
+// correction approval or the scheduled job - never by check-in/breaks (that would put every live
+// employee into the persisted INCOMPLETE population) and never by a read.
+//
+// `resolveWorkforceDayInfo` reads through the global pool, so it is resolved BEFORE the transaction
+// opens and passed in: a transaction that waited on a second pooled connection while holding its own
+// could starve the pool under concurrent punches.
+
+/** Resolves the day's Workforce info up front, but only when a stored record exists (the only case
+ *  in which the transaction will recalculate it). */
+async function preloadDayInfoIfRecordExists(companyId: string, employeeId: string, workDate: string): Promise<WorkforceDayInfo | undefined> {
+  if (!(await attendanceDailyRecordRepository.findOne(employeeId, workDate))) return undefined;
+  return resolveWorkforceDayInfo(companyId, employeeId, workDate);
+}
+
+async function refreshDailyRecordIfExists(
+  companyId: string,
+  employeeId: string,
+  workDate: string,
+  tx: Transaction,
+  dayInfo?: WorkforceDayInfo,
+): Promise<void> {
+  if (!(await attendanceDailyRecordRepository.findOne(employeeId, workDate, tx))) return;
+  await recalculateDailyRecordInternal(companyId, employeeId, workDate, tx, dayInfo);
+}
+
+/**
+ * The lock-order prologue shared by check-out and the break operations: period lock -> day lock ->
+ * open-session row lock. The session's work date is only known from an unlocked peek, so after
+ * locking the real row is re-read and must be the same session; if it changed in between (a
+ * concurrent punch on another work date) nothing is written and the caller retries.
+ */
+async function lockOpenSessionForPunch(companyId: string, employeeId: string, peek: { id: string; workDate: string }, tx: Transaction) {
+  await assertAttendancePeriodOpen(companyId, peek.workDate, tx);
+  await lockAttendanceDay(tx, employeeId, peek.workDate);
+  const open = await attendanceSessionRepository.findOpenForEmployeeLocked(employeeId, tx);
+  if (!open) throw new NoOpenSessionError();
+  if (open.id !== peek.id) throw new AttendanceChangedConcurrentlyError();
+  return open;
+}
+
 export async function checkIn(ctx: RequestContext, requestedEmployeeId: string, input: CheckInInput = {}): Promise<AttendanceSession> {
   requirePermission(ctx, "attendance.check_in");
   const targetEmployeeId = resolveTargetEmployeeId(ctx, requestedEmployeeId);
@@ -156,16 +206,32 @@ export async function checkIn(ctx: RequestContext, requestedEmployeeId: string, 
   const occurredAt = new Date();
   const { workDate, dayInfo, expectedStartAt, expectedEndAt, gracePeriodMinutes } = await resolveCheckInContext(ctx, targetEmployeeId, occurredAt);
 
+  // F-01 - an unlocked peek tells us whether an older session may be abandoned by this check-in, so
+  // its work date's day lock can be taken (in a fixed order) BEFORE the session row lock. Day infos
+  // for the records that may need refreshing are resolved before the transaction opens.
+  const peekOpen = await attendanceSessionRepository.findOpenForEmployee(targetEmployeeId);
+  const previousWorkDate = peekOpen && peekOpen.workDate !== workDate ? peekOpen.workDate : null;
+  const previousDayInfo = previousWorkDate ? await preloadDayInfoIfRecordExists(ctx.companyId, targetEmployeeId, previousWorkDate) : undefined;
+
   const session = await db.transaction(async (tx) => {
     // Batch 8 — must be the first thing this transaction does: the SHARE lock it takes on the
     // period row is what makes this check race-safe against a concurrent close (see
     // attendance-period.repository.ts's module doc).
     await assertAttendancePeriodOpen(ctx.companyId, workDate, tx);
 
+    // F-01 - day lock(s) next, sorted so two requests can never take them in opposite orders.
+    for (const lockDate of [...new Set([workDate, previousWorkDate].filter((d): d is string => d !== null))].sort()) {
+      await lockAttendanceDay(tx, targetEmployeeId, lockDate);
+    }
+
     // Row-locked implicitly by the partial unique index on (employeeId) WHERE status='OPEN' — a
     // concurrent duplicate check-in racing this same check fails on that constraint below, not on
     // an explicit SELECT ... FOR UPDATE (there is no existing row to lock for a brand-new session).
     const openExisting = await attendanceSessionRepository.findOpenForEmployeeLocked(targetEmployeeId, tx);
+    if (openExisting && openExisting.workDate !== workDate && openExisting.workDate !== previousWorkDate) {
+      // An open session on a work date we did not lock appeared after the peek.
+      throw new AttendanceChangedConcurrentlyError();
+    }
     if (openExisting) {
       if (openExisting.workDate === workDate) {
         // Still within the same work date as the open session — this is a genuine "already
@@ -185,6 +251,12 @@ export async function checkIn(ctx: RequestContext, requestedEmployeeId: string, 
         newData: { status: "ABANDONED" },
         metadata: { employeeId: targetEmployeeId, supersededByWorkDate: workDate },
       });
+      // F-01 - the abandoned session's work date: refresh its record if one exists (never create
+      // one). A closed period keeps its existing frozen behaviour: it is left untouched.
+      const previousPeriod = await attendancePeriodRepository.findByCompanyAndMonth(ctx.companyId, openExisting.workDate.slice(0, 7), tx);
+      if (previousPeriod?.status !== "CLOSED") {
+        await refreshDailyRecordIfExists(ctx.companyId, targetEmployeeId, openExisting.workDate, tx, previousDayInfo);
+      }
     }
 
     try {
@@ -216,6 +288,11 @@ export async function checkIn(ctx: RequestContext, requestedEmployeeId: string, 
         sourceMetadata: input.sourceMetadata ?? null,
         idempotencyKey: input.idempotencyKey ?? null,
       });
+
+      // F-01 - an existing record for this work date must reflect the new session; none is created. The
+      // existence check happens HERE, under the day lock, never from a pre-transaction peek: a record the
+      // scheduled job inserted a moment ago must be seen.
+      await refreshDailyRecordIfExists(ctx.companyId, targetEmployeeId, workDate, tx, dayInfo);
 
       return newSession;
     } catch (error) {
@@ -250,10 +327,13 @@ export async function checkOut(ctx: RequestContext, requestedEmployeeId: string,
 
   const occurredAt = new Date();
 
+  const peek = await attendanceSessionRepository.findOpenForEmployee(targetEmployeeId);
+  if (!peek) throw new NoOpenSessionError();
+  // Check-out ALWAYS calculates (and creates, if absent) the day's record - inside this transaction.
+  const dayInfo = await resolveWorkforceDayInfo(ctx.companyId, targetEmployeeId, peek.workDate);
+
   const session = await db.transaction(async (tx) => {
-    const open = await attendanceSessionRepository.findOpenForEmployeeLocked(targetEmployeeId, tx);
-    if (!open) throw new NoOpenSessionError();
-    await assertAttendancePeriodOpen(ctx.companyId, open.workDate, tx);
+    const open = await lockOpenSessionForPunch(ctx.companyId, targetEmployeeId, peek, tx);
 
     const openBreak = await attendanceEventRepository.findOpenBreak(open.id, tx);
     if (openBreak) throw new OpenBreakExistsError();
@@ -275,7 +355,12 @@ export async function checkOut(ctx: RequestContext, requestedEmployeeId: string,
       throw error;
     }
 
-    return attendanceSessionRepository.markClosed(tx, open.id, occurredAt);
+    const closed = await attendanceSessionRepository.markClosed(tx, open.id, occurredAt);
+
+    // F-01 - atomic with the punch: a committed check-out always has a consistent daily record. If
+    // the calculation or write fails, the whole check-out rolls back and the retry starts clean.
+    await recalculateDailyRecordInternal(ctx.companyId, targetEmployeeId, closed.workDate, tx, dayInfo);
+    return closed;
   });
 
   await recordAuditLog(ctx, {
@@ -285,10 +370,6 @@ export async function checkOut(ctx: RequestContext, requestedEmployeeId: string,
     newData: session,
     metadata: { employeeId: targetEmployeeId },
   });
-
-  // Triggered synchronously on check-out for immediate feedback, per
-  // docs/architecture/attendance-architecture.md's "Attendance Engine" section.
-  await recalculateDailyRecordInternal(ctx, targetEmployeeId, session.workDate);
 
   return session;
 }
@@ -307,15 +388,17 @@ export async function startBreak(ctx: RequestContext, requestedEmployeeId: strin
 
   const occurredAt = new Date();
 
+  const peek = await attendanceSessionRepository.findOpenForEmployee(targetEmployeeId);
+  if (!peek) throw new NoOpenSessionError();
+  const dayInfo = await preloadDayInfoIfRecordExists(ctx.companyId, targetEmployeeId, peek.workDate);
+
   const event = await db.transaction(async (tx) => {
-    const open = await attendanceSessionRepository.findOpenForEmployeeLocked(targetEmployeeId, tx);
-    if (!open) throw new NoOpenSessionError();
-    await assertAttendancePeriodOpen(ctx.companyId, open.workDate, tx);
+    const open = await lockOpenSessionForPunch(ctx.companyId, targetEmployeeId, peek, tx);
     const openBreak = await attendanceEventRepository.findOpenBreak(open.id, tx);
     if (openBreak) throw new OpenBreakExistsError();
 
     try {
-      return await attendanceEventRepository.create(tx, {
+      const created = await attendanceEventRepository.create(tx, {
         companyId: ctx.companyId,
         employeeId: targetEmployeeId,
         sessionId: open.id,
@@ -326,6 +409,8 @@ export async function startBreak(ctx: RequestContext, requestedEmployeeId: strin
         sourceMetadata: input.sourceMetadata ?? null,
         idempotencyKey: input.idempotencyKey ?? null,
       });
+      await refreshDailyRecordIfExists(ctx.companyId, targetEmployeeId, open.workDate, tx, dayInfo);
+      return created;
     } catch (error) {
       if (isUniqueViolation(error)) throw new DuplicateAttendanceEventError();
       throw error;
@@ -355,15 +440,17 @@ export async function endBreak(ctx: RequestContext, requestedEmployeeId: string,
 
   const occurredAt = new Date();
 
+  const peek = await attendanceSessionRepository.findOpenForEmployee(targetEmployeeId);
+  if (!peek) throw new NoOpenSessionError();
+  const dayInfo = await preloadDayInfoIfRecordExists(ctx.companyId, targetEmployeeId, peek.workDate);
+
   const event = await db.transaction(async (tx) => {
-    const open = await attendanceSessionRepository.findOpenForEmployeeLocked(targetEmployeeId, tx);
-    if (!open) throw new NoOpenSessionError();
-    await assertAttendancePeriodOpen(ctx.companyId, open.workDate, tx);
+    const open = await lockOpenSessionForPunch(ctx.companyId, targetEmployeeId, peek, tx);
     const openBreak = await attendanceEventRepository.findOpenBreak(open.id, tx);
     if (!openBreak) throw new NoOpenBreakError();
 
     try {
-      return await attendanceEventRepository.create(tx, {
+      const created = await attendanceEventRepository.create(tx, {
         companyId: ctx.companyId,
         employeeId: targetEmployeeId,
         sessionId: open.id,
@@ -374,6 +461,8 @@ export async function endBreak(ctx: RequestContext, requestedEmployeeId: string,
         sourceMetadata: input.sourceMetadata ?? null,
         idempotencyKey: input.idempotencyKey ?? null,
       });
+      await refreshDailyRecordIfExists(ctx.companyId, targetEmployeeId, open.workDate, tx, dayInfo);
+      return created;
     } catch (error) {
       if (isUniqueViolation(error)) throw new DuplicateAttendanceEventError();
       throw error;
@@ -581,7 +670,13 @@ async function buildCorrectionOverride(
  * Scoped by `companyId` rather than a `RequestContext` so the scheduled job needs no user identity.
  * It performs no permission check, so every caller must already have authorized the action.
  */
-async function computeDailyResult(companyId: string, employeeId: string, workDate: string, executor: DbExecutor): Promise<DailyCalculationResult> {
+async function computeDailyResult(
+  companyId: string,
+  employeeId: string,
+  workDate: string,
+  executor: DbExecutor,
+  preloadedDayInfo?: WorkforceDayInfo,
+): Promise<DailyCalculationResult> {
   const sessions = await buildSessionInputs(employeeId, workDate, executor);
 
   // Batch 12 — the company policy is loaded exactly once here (the one path shared by check-out,
@@ -597,7 +692,7 @@ async function computeDailyResult(companyId: string, employeeId: string, workDat
   const overrides = await Promise.all(approvedCorrections.map((correction) => buildCorrectionOverride(companyId, correction, executor, policy)));
   const correctedSessions = applyCorrectionsToSessions(sessions, overrides);
 
-  const dayInfo = await resolveWorkforceDayInfo(companyId, employeeId, workDate);
+  const dayInfo = preloadedDayInfo ?? (await resolveWorkforceDayInfo(companyId, employeeId, workDate));
   const window = dayInfo.expectedWindow;
 
   const dayContext: DailyWorkforceContext = {
@@ -612,16 +707,23 @@ async function computeDailyResult(companyId: string, employeeId: string, workDat
   return calculateDailyAttendance(correctedSessions, dayContext, policy);
 }
 
+/**
+ * Calculates and upserts the day's record. Always inside a transaction (the type enforces it) and
+ * always under the per-(employee, work date) day lock, taken BEFORE the inputs are read so the
+ * calculation can never be based on a state another writer is about to change (F-01).
+ */
 async function recalculateDailyRecordInternal(
-  ctx: RequestContext,
+  companyId: string,
   employeeId: string,
   workDate: string,
-  executor: DbExecutor = db,
+  executor: Transaction,
+  preloadedDayInfo?: WorkforceDayInfo,
 ): Promise<AttendanceDailyRecord> {
-  const result = await computeDailyResult(ctx.companyId, employeeId, workDate, executor);
+  await lockAttendanceDay(executor, employeeId, workDate);
+  const result = await computeDailyResult(companyId, employeeId, workDate, executor, preloadedDayInfo);
 
   return attendanceDailyRecordRepository.upsert(executor, {
-    companyId: ctx.companyId,
+    companyId,
     employeeId,
     workDate,
     status: result.status,
@@ -656,6 +758,9 @@ export type MaterializeMissingResult = "CREATED" | "SKIPPED_EXISTING";
 export async function materializeMissingDailyRecord(companyId: string, employeeId: string, workDate: string): Promise<MaterializeMissingResult> {
   return db.transaction(async (tx) => {
     await assertAttendancePeriodOpen(companyId, workDate, tx);
+    // F-01 - same per-(employee, work date) lock as every other daily-record writer, taken before the
+    // existence check and the calculation so a concurrent punch cannot be missed.
+    await lockAttendanceDay(tx, employeeId, workDate);
 
     if (await attendanceDailyRecordRepository.findOne(employeeId, workDate, tx)) return "SKIPPED_EXISTING";
 
@@ -692,7 +797,7 @@ export async function recalculateDailyRecord(ctx: RequestContext, requestedEmplo
   // otherwise has no transactional needs of its own (a single upsert statement is already atomic).
   const record = await db.transaction(async (tx) => {
     await assertAttendancePeriodOpen(ctx.companyId, workDate, tx);
-    return recalculateDailyRecordInternal(ctx, targetEmployeeId, workDate, tx);
+    return recalculateDailyRecordInternal(ctx.companyId, targetEmployeeId, workDate, tx);
   });
   await recordAuditLog(ctx, {
     action: "attendance.recalculate",
@@ -704,22 +809,13 @@ export async function recalculateDailyRecord(ctx: RequestContext, requestedEmplo
   return record;
 }
 
-/** Returns the day's calculated record (computing it on demand if it doesn't exist yet — daily
- *  records are derived/recalculable, not a separate source of truth, so this is safe — see
- *  ADR-0003) plus that date's sessions, each enriched with its own display-only duration (see
- *  `AttendanceSessionView`) — never the source of the day's authoritative totals.
+/** Returns the day's record plus that date's sessions, each enriched with its own display-only
+ *  duration (see `AttendanceSessionView`) — never the source of the day's authoritative totals.
  *
- *  Batch 8 — this is a GET path, so the "compute on demand" behavior above must never INSERT/
- *  UPDATE `attendance_daily_records` for a work date whose period is CLOSED (a closed period must
- *  stay frozen even for reads that happen to be the first thing to look at a given day). When no
- *  record exists yet AND the period is closed, this returns the synthetic, non-persisted
- *  `"UNPROCESSED"` stand-in (see `UnprocessedAttendanceDayRecord`) instead of calling
- *  `recalculateDailyRecordInternal` — the same "no row = not yet known, never fabricated" idea the
- *  calendar already uses, just applied to a single-day read instead of a grid. Deliberately uses
- *  the lightweight, non-locking `isAttendancePeriodClosed` (a plain read) rather than
- *  `assertAttendancePeriodOpen` — that guard exists to hold a SHARE lock across a *write*
- *  transaction, which this function has none of. An existing record is always returned exactly as
- *  stored, whether the period is open or closed — no lookup or check is needed for that branch. */
+ *  F-01 — strictly READ-ONLY. A stored record is returned exactly as stored. With no stored record:
+ *  a CLOSED period returns the synthetic `"UNPROCESSED"` stand-in (Batch 8), and an open period
+ *  returns the engine's result calculated in memory as a provisional record (`id: null`). Nothing
+ *  here ever writes `attendance_daily_records`; see `recalculateDailyRecordInternal` for who does. */
 export async function getAttendanceDay(
   ctx: RequestContext,
   requestedEmployeeId: string,
@@ -762,8 +858,32 @@ export async function getAttendanceDay(
     };
   }
 
-  const record = await recalculateDailyRecordInternal(ctx, targetEmployeeId, workDate);
-  return { record, sessions };
+  // F-01 - a read never writes. No stored record (open period): calculate the day in memory and
+  // return it as a provisional record (`id: null`). Stored records are created by check-out, explicit
+  // HR actions, correction approval and the scheduled job only.
+  const result = await computeDailyResult(ctx.companyId, targetEmployeeId, workDate, db);
+  return {
+    record: {
+      companyId: ctx.companyId,
+      employeeId: targetEmployeeId,
+      workDate,
+      id: null,
+      status: result.status,
+      scheduledMinutes: result.scheduledMinutes,
+      workedMinutes: result.workedMinutes,
+      breakMinutes: result.breakMinutes,
+      overtimeMinutes: result.overtimeMinutes,
+      lateMinutes: result.lateMinutes,
+      earlyDepartureMinutes: result.earlyDepartureMinutes,
+      firstCheckInAt: result.firstCheckInAt,
+      lastCheckOutAt: result.lastCheckOutAt,
+      sessionCount: result.sessionCount,
+      calculatedAt: null,
+      createdAt: null,
+      updatedAt: null,
+    },
+    sessions,
+  };
 }
 
 export async function listAttendanceForEmployee(
@@ -1034,7 +1154,7 @@ async function reviewCorrection(
 
     if (status === "APPROVED") {
       try {
-        await recalculateDailyRecordInternal(ctx, existing.employeeId, existing.workDate, tx);
+        await recalculateDailyRecordInternal(ctx.companyId, existing.employeeId, existing.workDate, tx);
       } catch {
         throw new RecalculationFailedError();
       }
@@ -1256,4 +1376,29 @@ export async function getAttendanceDashboard(ctx: RequestContext, filters: Atten
     incompleteAttendance,
     table,
   };
+}
+
+/**
+ * F-01 repair entry point (see `scripts/repair-attendance-daily-records.ts`): recalculates an
+ * EXISTING daily record through the one calculation engine, under the same day lock and period guard
+ * as every other writer. Never creates a record and never touches a closed period. System-scoped (no
+ * end user), so it performs no permission check — it is not exposed to any request handler.
+ */
+export async function recalculateExistingDailyRecordForRepair(
+  companyId: string,
+  employeeId: string,
+  workDate: string,
+): Promise<"REPAIRED" | "SKIPPED_CLOSED" | "NO_RECORD"> {
+  try {
+    return await db.transaction(async (tx) => {
+      await assertAttendancePeriodOpen(companyId, workDate, tx);
+      await lockAttendanceDay(tx, employeeId, workDate);
+      if (!(await attendanceDailyRecordRepository.findOne(employeeId, workDate, tx))) return "NO_RECORD" as const;
+      await recalculateDailyRecordInternal(companyId, employeeId, workDate, tx);
+      return "REPAIRED" as const;
+    });
+  } catch (error) {
+    if (error instanceof AttendancePeriodLockedError) return "SKIPPED_CLOSED";
+    throw error;
+  }
 }

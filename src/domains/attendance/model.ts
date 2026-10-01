@@ -92,9 +92,24 @@ export type UnprocessedAttendanceDayRecord = Omit<AttendanceDailyRecord, "id" | 
   updatedAt: null;
 };
 
-/** `getAttendanceDay`'s return type for a single day — either a real persisted record, or the
- *  synthetic unprocessed stand-in above. Never widened onto any other attendance read path. */
-export type AttendanceDayRecord = AttendanceDailyRecord | UnprocessedAttendanceDayRecord;
+/**
+ * F-01 — what `getAttendanceDay` returns for an OPEN-period day that has no stored record: the
+ * engine's result calculated in memory, never persisted (a read must not write). Same fields and
+ * status vocabulary as a real record, but `id` (and the row timestamps) are `null` because no row
+ * exists. A stored record is only ever created by check-out, an explicit HR action, a correction
+ * approval or the scheduled job.
+ */
+export type ProvisionalAttendanceDayRecord = Omit<AttendanceDailyRecord, "id" | "calculatedAt" | "createdAt" | "updatedAt"> & {
+  id: null;
+  calculatedAt: null;
+  createdAt: null;
+  updatedAt: null;
+};
+
+/** `getAttendanceDay`'s return type for a single day — a real persisted record, a provisional
+ *  in-memory calculation (`id === null`, real status), or the closed-period unprocessed stand-in
+ *  above. Never widened onto any other attendance read path. */
+export type AttendanceDayRecord = AttendanceDailyRecord | ProvisionalAttendanceDayRecord | UnprocessedAttendanceDayRecord;
 
 export type AttendanceCorrection = typeof attendanceCorrections.$inferSelect;
 export type AttendanceEventType = (typeof attendanceEventTypeEnum.enumValues)[number];

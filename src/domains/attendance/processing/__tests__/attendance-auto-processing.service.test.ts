@@ -357,6 +357,78 @@ describe.skipIf(!available)("scheduled attendance processing (Batch 13)", () => 
     });
   });
 
+  // F-01 — the job's interplay with live punches. It still only ever INSERTs missing rows.
+  describe("interplay with check-in (F-01)", () => {
+    const at = (iso: string) => vi.setSystemTime(new Date(iso));
+    const rowFor = (employeeId: string, workDate: string) =>
+      db.query.attendanceDailyRecords.findFirst({
+        where: and(eq(schema.attendanceDailyRecords.employeeId, employeeId), eq(schema.attendanceDailyRecords.workDate, workDate)),
+      });
+
+    async function scheduledEmployee(label: string) {
+      const id = await createEmployee(label);
+      await assign(id);
+      return id;
+    }
+
+    it("a check-in with no daily row leaves none; the job then materializes the correct INCOMPLETE result", async () => {
+      const id = await scheduledEmployee("f01-nocrow");
+      const D = "2026-05-04";
+      try {
+        at(`${D}T09:00:00Z`);
+        await attendanceSvc.checkIn(ctx, id); // never checks out
+        expect(await rowFor(id, D)).toBeUndefined();
+
+        at(`${D}T23:30:00Z`);
+        await auto.processCompanyWorkDate(companyAId, D, "SCHEDULED");
+        const row = await rowFor(id, D);
+        expect(row?.status).toBe("INCOMPLETE");
+        expect(row?.sessionCount).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("the job never overwrites a row that a check-in/break already refreshed", async () => {
+      const id = await scheduledEmployee("f01-keep");
+      const D = "2026-05-05";
+      try {
+        at(`${D}T08:00:00Z`);
+        await attendanceSvc.recalculateDailyRecord(ctx, id, D); // existing row
+        at(`${D}T09:00:00Z`);
+        await attendanceSvc.checkIn(ctx, id); // refreshes it
+        const refreshed = await rowFor(id, D);
+        expect(refreshed?.sessionCount).toBe(1);
+
+        at(`${D}T23:30:00Z`);
+        await auto.processCompanyWorkDate(companyAId, D, "SCHEDULED");
+        const after = await rowFor(id, D);
+        expect(after?.id).toBe(refreshed?.id);
+        expect(after?.calculatedAt.toISOString()).toBe(refreshed?.calculatedAt.toISOString());
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("the job racing a check-in never leaves a row that contradicts the session", async () => {
+      const ids = await Promise.all([scheduledEmployee("f01-race-a"), scheduledEmployee("f01-race-b"), scheduledEmployee("f01-race-c")]);
+      const D = "2026-05-06";
+      try {
+        at(`${D}T09:00:00Z`);
+        await Promise.all([auto.processCompanyWorkDate(companyAId, D, "SCHEDULED"), ...ids.map((id) => attendanceSvc.checkIn(ctx, id))]);
+
+        for (const id of ids) {
+          const row = await rowFor(id, D);
+          // Either the check-in won (no row at all: the job's per-employee lock then saw the session and
+          // wrote INCOMPLETE), or the job inserted first and the check-in refreshed it. Never ABSENT/0.
+          expect(row === undefined || (row.sessionCount === 1 && row.status === "INCOMPLETE")).toBe(true);
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe("run history (permission-gated, company-scoped)", () => {
     it("lets HR roles list their own company's runs, newest first, paginated", async () => {
       const page1 = await auto.listAttendanceProcessingRuns({ ...ctx, role: "HR_ADMIN" }, { page: 1, pageSize: 2 });

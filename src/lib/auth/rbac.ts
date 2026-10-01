@@ -38,6 +38,7 @@ export const PERMISSIONS = [
   "employee.archive",
   "employee.manage_status",
   "employee.manage_documents",
+  "employee.view_documents",
   "employee.view_private",
   "attendance.check_in",
   "attendance.check_out",
@@ -150,6 +151,9 @@ const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "employee.archive",
     "employee.manage_status",
     "employee.manage_documents",
+    // Viewing/downloading employee documents (contracts, IDs, visas) is HR-only: a line manager holds
+    // employee.view but NOT this. Self-access is a service-layer bypass, like the rest of the employee data.
+    "employee.view_documents",
     "employee.view_private",
     // "Full attendance permissions except anything explicitly restricted to company-level
     // administration" — period unlock is reserved for COMPANY_ADMIN/SUPER_ADMIN (see §16 of the
@@ -191,6 +195,7 @@ const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "employee.update",
     "employee.manage_status",
     "employee.manage_documents",
+    "employee.view_documents",
     "employee.view_private",
     "attendance.check_in",
     "attendance.check_out",

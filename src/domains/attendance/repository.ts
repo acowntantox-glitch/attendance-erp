@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, gte, ilike, inArray, isNull, lte, or } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, ilike, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { db, type DbExecutor, type Transaction } from "@/db/client";
 import {
   attendanceCorrections,
@@ -29,6 +29,27 @@ export type CreateSessionInput = {
   isWorkingDay: boolean;
   source: AttendanceSource;
 };
+
+/**
+ * The ONE per-(employee, work date) lock every writer of `attendance_daily_records` takes (F-01).
+ * Transaction-level advisory lock — released automatically at COMMIT/ROLLBACK, and safe behind a
+ * transaction-mode pooler (Neon `-pooler`/PgBouncer), exactly like the processing lock in
+ * `attendance-processing.repository.ts` (different key namespace, so the two never collide).
+ *
+ * Required lock order in every mutation: period lock -> THIS lock -> session row lock -> daily
+ * record read/write. Re-entrant within one transaction, so a path may take it early (to honour the
+ * order) and the daily-record writers below take it again defensively at no cost. Takes a
+ * `Transaction` on purpose: outside a transaction an advisory xact lock is released immediately and
+ * would protect nothing.
+ */
+export async function lockAttendanceDay(tx: Transaction, employeeId: string, workDate: string): Promise<void> {
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`attendance_day:${employeeId}`}), hashtext(${workDate}))`);
+}
+
+export async function withAttendanceDayLock<T>(employeeId: string, workDate: string, tx: Transaction, callback: () => Promise<T>): Promise<T> {
+  await lockAttendanceDay(tx, employeeId, workDate);
+  return callback();
+}
 
 export const attendanceSessionRepository = {
   findById(id: string, executor: DbExecutor = db) {
@@ -240,7 +261,8 @@ export const attendanceDailyRecordRepository = {
       orderBy: asc(attendanceDailyRecords.workDate),
     });
   },
-  async upsert(executor: DbExecutor, input: DailyRecordWriteInput) {
+  async upsert(executor: Transaction, input: DailyRecordWriteInput) {
+    await lockAttendanceDay(executor, input.employeeId, input.workDate);
     const rows = await executor
       .insert(attendanceDailyRecords)
       .values({ ...input, calculatedAt: new Date() })
@@ -266,7 +288,8 @@ export const attendanceDailyRecordRepository = {
   /** Batch 13 — insert-only counterpart of `upsert`: an existing (employee, work date) record is
    *  never touched (`ON CONFLICT DO NOTHING`). Returns the new row, or `null` when a record already
    *  existed. */
-  async insertIfAbsent(executor: DbExecutor, input: DailyRecordWriteInput) {
+  async insertIfAbsent(executor: Transaction, input: DailyRecordWriteInput) {
+    await lockAttendanceDay(executor, input.employeeId, input.workDate);
     const rows = await executor
       .insert(attendanceDailyRecords)
       .values({ ...input, calculatedAt: new Date() })

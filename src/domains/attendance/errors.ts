@@ -6,6 +6,14 @@ export class AlreadyCheckedInError extends ConflictError {
   }
 }
 
+/** The employee's attendance changed between reading it and locking it (e.g. a concurrent punch on
+ *  another work date). Nothing was written; the client may simply retry. */
+export class AttendanceChangedConcurrentlyError extends ConflictError {
+  constructor() {
+    super("This employee's attendance changed while the request was being processed. Please try again.");
+  }
+}
+
 export class NoOpenSessionError extends BusinessRuleError {
   constructor() {
     super("There is no open attendance session to act on.");

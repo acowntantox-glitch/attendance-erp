@@ -102,30 +102,41 @@ describe.skipIf(!available)("getAttendanceDay — closed-period read-only guaran
     await pool.end();
   });
 
-  describe("A. OPEN period + no daily record", () => {
-    it("still lazily materializes exactly one daily record", async () => {
+  describe("A. OPEN period + no daily record (F-01: reads never write)", () => {
+    it("returns a provisional in-memory calculation (id === null) and creates no row", async () => {
       const MONTH = "2033-01";
       const WORK_DATE = `${MONTH}-10`;
       const employee = await newEmployee();
 
       const before = await dailyRecordCount(companyAId);
-      const noneYet = await db.query.attendanceDailyRecords.findFirst({
-        where: (t, { and, eq: dbEq }) => and(dbEq(t.employeeId, employee.id), dbEq(t.workDate, WORK_DATE)),
-      });
-      expect(noneYet).toBeUndefined();
-
       const result = await attendanceSvc.getAttendanceDay(ctx, employee.id, WORK_DATE);
-      expect(result.record.status).not.toBe("UNPROCESSED");
-      expect(result.record.id).not.toBeNull();
 
-      const after = await dailyRecordCount(companyAId);
-      expect(after - before).toBe(1);
+      expect(result.record.id).toBeNull();
+      expect(result.record.status).not.toBe("UNPROCESSED"); // a real engine result, not the closed-period stand-in
+      expect(result.record.employeeId).toBe(employee.id);
+      expect(result.record.workDate).toBe(WORK_DATE);
+      expect(result.record.calculatedAt).toBeNull();
 
+      expect(await dailyRecordCount(companyAId)).toBe(before);
       const persisted = await db.query.attendanceDailyRecords.findFirst({
         where: (t, { and, eq: dbEq }) => and(dbEq(t.employeeId, employee.id), dbEq(t.workDate, WORK_DATE)),
       });
-      expect(persisted).toBeDefined();
-      expect(persisted?.status).toBe(result.record.status);
+      expect(persisted).toBeUndefined();
+    });
+
+    it("a future date writes nothing either (no daily record, no new period row)", async () => {
+      const FUTURE = "2099-06-15";
+      const employee = await newEmployee();
+
+      const before = await dailyRecordCount(companyAId);
+      const periodsBefore = await db.query.attendancePeriods.findMany({ where: (t, { eq: dbEq }) => dbEq(t.companyId, companyAId) });
+
+      const result = await attendanceSvc.getAttendanceDay(ctx, employee.id, FUTURE);
+      expect(result.record.id).toBeNull();
+
+      expect(await dailyRecordCount(companyAId)).toBe(before);
+      const periodsAfter = await db.query.attendancePeriods.findMany({ where: (t, { eq: dbEq }) => dbEq(t.companyId, companyAId) });
+      expect(periodsAfter.length).toBe(periodsBefore.length);
     });
   });
 
