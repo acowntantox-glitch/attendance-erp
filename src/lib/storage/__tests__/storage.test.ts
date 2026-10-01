@@ -22,7 +22,7 @@ describe("storage: buildDocumentKey", () => {
 describe("storage: fails closed when unconfigured", () => {
   it("rejects getUploadUrl with StorageNotConfiguredError", async () => {
     const { getUploadUrl, StorageNotConfiguredError } = await import("../index");
-    await expect(getUploadUrl("some/key", "application/pdf")).rejects.toBeInstanceOf(StorageNotConfiguredError);
+    await expect(getUploadUrl("some/key", "application/pdf", 10)).rejects.toBeInstanceOf(StorageNotConfiguredError);
   });
 
   it("rejects getObjectStream with StorageNotConfiguredError", async () => {

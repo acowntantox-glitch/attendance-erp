@@ -1,13 +1,14 @@
 import { db } from "@/db/client";
 import type { RequestContext } from "@/lib/auth/request-context";
 import { assertCompanyAccess, requirePermission } from "@/lib/auth/request-context";
-import { AuthorizationError, BusinessRuleError, isUniqueViolation } from "@/lib/errors";
+import { AuthorizationError, BusinessRuleError, ResourceHiddenError, isUniqueViolation } from "@/lib/errors";
 import { recordAuditLog } from "@/domains/audit/service";
 import { employeeRepository } from "@/domains/employee/repository";
 import { EmployeeNotFoundError } from "@/domains/employee/errors";
+import { assertEmployeeInScope, getEmployeeScope } from "@/domains/employee/scope";
 import { branchRepository, companyRepository } from "@/domains/organization/repository";
 import { BranchNotFoundError } from "@/domains/organization/errors";
-import { addDays, computeExpectedWindow, dayOfWeekInZone, enumerateDateRange, resolveTimezone } from "@/lib/datetime";
+import { addDays, computeExpectedWindow, dayOfWeekInZone, enumerateDateRange, resolveTimezone, zonedWallTimeToUtc } from "@/lib/datetime";
 import {
   employeeScheduleAssignmentRepository,
   holidayRepository,
@@ -202,6 +203,7 @@ async function loadEmployeeInCompany(ctx: RequestContext, employeeId: string) {
   const employee = await employeeRepository.findById(employeeId);
   if (!employee) throw new EmployeeNotFoundError();
   assertCompanyAccess(ctx, employee.companyId);
+  await assertEmployeeInScope(ctx, employee.id); // F-02: a MANAGER sees their own reporting line only
   return employee;
 }
 
@@ -528,6 +530,7 @@ export async function getWorkforceDayInfo(ctx: RequestContext, employeeId: strin
     throw new AuthorizationError("No employee record is linked to this account.");
   }
   const targetEmployeeId = ctx.role === "EMPLOYEE" ? ctx.employeeId! : employeeId;
+  await assertEmployeeInScope(ctx, targetEmployeeId); // F-02
 
   return resolveWorkforceDayInfo(ctx.companyId, targetEmployeeId, date);
 }
@@ -545,7 +548,7 @@ export async function resolveWorkforceDayInfo(companyId: string, employeeId: str
   const targetEmployeeId = employeeId;
   const employee = await employeeRepository.findById(targetEmployeeId);
   if (!employee) throw new EmployeeNotFoundError();
-  if (employee.companyId !== companyId) throw new AuthorizationError("This resource does not belong to your company.");
+  if (employee.companyId !== companyId) throw new ResourceHiddenError("This resource does not belong to your company.");
   const [company, branch] = await Promise.all([
     companyRepository.findById(companyId),
     employee.locationId ? branchRepository.findById(employee.locationId) : Promise.resolve(null),
@@ -572,7 +575,8 @@ export async function resolveWorkforceDayInfo(companyId: string, employeeId: str
 
   // Step 2: weekly off — employee override takes precedence over the company default.
   const timezone = resolveTimezone(branch?.timezone, company.timezone);
-  const dow = dayOfWeekInZone(new Date(`${date}T12:00:00Z`), timezone);
+  // Local noon of `date` in the zone (not 12:00 UTC: in UTC+13/+14 that instant is already the next local day).
+  const dow = dayOfWeekInZone(zonedWallTimeToUtc(date, "12:00:00", timezone), timezone);
 
   const override = await weeklyOffRuleRepository.findActiveOverrideForEmployee(targetEmployeeId, date);
   let isWeeklyOff = false;
@@ -687,7 +691,11 @@ export async function getWorkforceDashboardSummary(ctx: RequestContext, date?: s
   requirePermission(ctx, "workforce_dashboard.view");
   const today = date ?? todayIso();
 
-  const employeeIds = await workforceEmployeeRepository.listActiveIds(ctx.companyId);
+  // F-02: a MANAGER's tiles and the upcoming-changes list cover their own reporting line only. (Before this
+  // narrowing the per-employee day lookups below were also refused for anyone outside the team, which would
+  // have failed the whole dashboard for a manager.)
+  const scope = await getEmployeeScope(ctx);
+  const employeeIds = (await workforceEmployeeRepository.listActiveIds(ctx.companyId)).filter(({ id }) => !scope || scope.has(id));
   const dayInfos = await Promise.all(employeeIds.map(({ id }) => getWorkforceDayInfo(ctx, id, today)));
 
   const employeesScheduledToday = dayInfos.filter((info) => info.isWorkingDay).length;
@@ -695,10 +703,8 @@ export async function getWorkforceDashboardSummary(ctx: RequestContext, date?: s
   const employeesOnHolidayToday = dayInfos.filter((info) => info.isHoliday).length;
 
   const activeShiftCount = await shiftRepository.countActive(ctx.companyId);
-  const upcomingScheduleChanges = await employeeScheduleAssignmentRepository.listUpcoming(
-    ctx.companyId,
-    addDays(today, 1),
-    addDays(today, 14),
+  const upcomingScheduleChanges = (await employeeScheduleAssignmentRepository.listUpcoming(ctx.companyId, addDays(today, 1), addDays(today, 14))).filter(
+    (change) => !scope || scope.has(change.employeeId),
   );
 
   return {

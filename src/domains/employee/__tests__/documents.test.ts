@@ -361,6 +361,40 @@ describe.skipIf(!available)("employee documents", () => {
       expect(after).toBe(before);
     });
 
+    it("a download is always an attachment, never sniffed: an unexpected stored type is served as opaque bytes and the file name cannot break the header", async () => {
+      const downloadRoute = await import("@/app/api/employees/[id]/documents/[documentId]/download/route");
+      const hostile = await repository.employeeDocumentRepository.create({
+        companyId,
+        employeeId,
+        documentType: "OTHER",
+        title: "hostile",
+        storageKey: "test/f03/hostile",
+        originalFilename: 'we"ird\r\nna/me<script>.pdf',
+        mimeType: "application/pdf",
+        sizeBytes: 10,
+      });
+      reqCtx.current = hrAdminCtx;
+      try {
+        // An object that is not one of the allowed formats (it reached the bucket some other way).
+        vi.mocked(storageModule.getObjectStream).mockResolvedValueOnce({ body: new ReadableStream(), contentType: "text/html", contentLength: 5 });
+        const response = await downloadRoute.GET(new Request("http://localhost/api/x"), { params: Promise.resolve({ id: employeeId, documentId: hostile.id }) });
+        expect(response.status).toBe(200);
+        expect(response.headers.get("content-type")).toBe("application/octet-stream");
+        expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+        const disposition = response.headers.get("content-disposition")!;
+        expect(disposition.startsWith("attachment;")).toBe(true);
+        expect(disposition).not.toMatch(/[\r\n<>/]/);
+        expect(disposition.match(/"/g)).toHaveLength(2); // only the two quotes that delimit the file name
+
+        // A genuine allowed type is served as itself.
+        vi.mocked(storageModule.getObjectStream).mockResolvedValueOnce({ body: new ReadableStream(), contentType: "application/pdf", contentLength: 5 });
+        const pdf = await downloadRoute.GET(new Request("http://localhost/api/x"), { params: Promise.resolve({ id: employeeId, documentId: subjectDocumentId }) });
+        expect(pdf.headers.get("content-type")).toBe("application/pdf");
+      } finally {
+        reqCtx.current = null;
+      }
+    });
+
     it("the API routes answer a MANAGER with the standard 403 envelope (list and download)", async () => {
       const listRoute = await import("@/app/api/employees/[id]/documents/route");
       const downloadRoute = await import("@/app/api/employees/[id]/documents/[documentId]/download/route");

@@ -121,6 +121,8 @@ export type EmployeeListFilters = {
   employmentType?: EmploymentType;
   joinedFrom?: string;
   joinedTo?: string;
+  /** Internal (set by the service for a MANAGER): restrict the list to these employee ids. */
+  scopeEmployeeIds?: string[];
   sort?: "name_asc" | "name_desc" | "joined_asc" | "joined_desc" | "employee_number_asc";
 };
 

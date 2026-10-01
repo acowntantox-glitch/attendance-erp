@@ -444,7 +444,14 @@ export const attendanceCorrectionRepository = {
 // actually match that day, not by total company size.
 // ---------------------------------------------------------------------------
 
-export type DashboardEmployeeFilters = { search?: string; departmentId?: string; locationId?: string };
+/** `scopeIds` (F-02): a MANAGER's reporting-line scope - only these employees are counted/listed (an empty
+ *  list matches nobody). Undefined = no restriction (every other role). */
+export type DashboardEmployeeFilters = { search?: string; departmentId?: string; locationId?: string; scopeIds?: string[] };
+
+function scopeCondition(scopeIds: string[] | undefined) {
+  if (!scopeIds) return undefined;
+  return scopeIds.length > 0 ? inArray(employees.id, scopeIds) : sql`false`;
+}
 
 function buildActiveEmployeeConditions(companyId: string, filters: DashboardEmployeeFilters) {
   const conditions = [eq(employees.companyId, companyId), eq(employees.isArchived, false), eq(employees.employmentStatus, "ACTIVE")];
@@ -454,20 +461,22 @@ function buildActiveEmployeeConditions(companyId: string, filters: DashboardEmpl
   }
   if (filters.departmentId) conditions.push(eq(employees.departmentId, filters.departmentId));
   if (filters.locationId) conditions.push(eq(employees.locationId, filters.locationId));
+  const scope = scopeCondition(filters.scopeIds);
+  if (scope) conditions.push(scope);
   return and(...conditions)!;
 }
 
 export const attendanceDashboardRepository = {
-  countActiveEmployees(companyId: string, executor: DbExecutor = db): Promise<number> {
+  countActiveEmployees(companyId: string, scopeIds?: string[], executor: DbExecutor = db): Promise<number> {
     return executor
       .select({ value: count() })
       .from(employees)
-      .where(and(eq(employees.companyId, companyId), eq(employees.isArchived, false), eq(employees.employmentStatus, "ACTIVE")))
+      .where(and(eq(employees.companyId, companyId), eq(employees.isArchived, false), eq(employees.employmentStatus, "ACTIVE"), scopeCondition(scopeIds)))
       .then((rows) => rows[0]?.value ?? 0);
   },
   /** One row per status that has at least one record for this date — callers fill in zero for
    *  every status with no row, rather than this query inventing zero-rows for all nine. */
-  getStatusCounts(companyId: string, workDate: string, executor: DbExecutor = db): Promise<{ status: AttendanceDailyStatus; value: number }[]> {
+  getStatusCounts(companyId: string, workDate: string, scopeIds?: string[], executor: DbExecutor = db): Promise<{ status: AttendanceDailyStatus; value: number }[]> {
     // Joined to `employees` and scoped to active ones so a record left over from a
     // since-archived/terminated employee never inflates a status count or skews the derived
     // "no record yet" figure against the active headcount.
@@ -481,6 +490,7 @@ export const attendanceDashboardRepository = {
           eq(attendanceDailyRecords.workDate, workDate),
           eq(employees.isArchived, false),
           eq(employees.employmentStatus, "ACTIVE"),
+          scopeCondition(scopeIds),
         ),
       )
       .groupBy(attendanceDailyRecords.status);

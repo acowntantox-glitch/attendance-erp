@@ -42,6 +42,14 @@ export class AuthorizationError extends AppError {
   }
 }
 
+/**
+ * F-24 - a denial that must NOT reveal whether the thing exists: the resource belongs to another company, or a
+ * manager asks about someone outside their team. Internally it is still an AuthorizationError (so existing
+ * handling and tests are unchanged); at the API boundary it is answered exactly like a missing resource
+ * (404, same body), so a caller cannot tell "does not exist" from "exists but not yours".
+ */
+export class ResourceHiddenError extends AuthorizationError {}
+
 export class NotFoundError extends AppError {
   constructor(entity: string, message = `${entity} was not found.`) {
     super("NOT_FOUND", message, 404);

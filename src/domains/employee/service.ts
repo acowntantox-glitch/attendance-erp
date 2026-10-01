@@ -1,12 +1,15 @@
 import { db } from "@/db/client";
 import type { RequestContext } from "@/lib/auth/request-context";
 import { assertCompanyAccess, requirePermission } from "@/lib/auth/request-context";
-import { can } from "@/lib/auth/rbac";
-import { isUniqueViolation } from "@/lib/errors";
+import { can, canManageUserRole } from "@/lib/auth/rbac";
+import { invalidateSessionsForUserInCompany } from "@/lib/auth/session";
+import { AuthorizationError, isUniqueViolation } from "@/lib/errors";
 import { recordAuditLog } from "@/domains/audit/service";
 import { branchRepository, departmentRepository, designationRepository } from "@/domains/organization/repository";
 import { BranchNotFoundError, DepartmentNotFoundError, DesignationNotFoundError } from "@/domains/organization/errors";
 import { companyMembershipRepository } from "@/domains/auth/repository";
+import { userManagementRepository } from "@/domains/auth/user-management.repository";
+import { assertEmployeeInScope, getEmployeeScope } from "./scope";
 import * as storage from "@/lib/storage";
 import {
   employeeDocumentRepository,
@@ -129,6 +132,38 @@ async function assertReferencedEntitiesBelongToCompany(
   }
 }
 
+/** F-02/F-04 - a MANAGER may act only on their own reporting line (see `scope.ts`); other roles unchanged. */
+async function assertInManagerScope(ctx: RequestContext, employeeId: string): Promise<void> {
+  await assertEmployeeInScope(ctx, employeeId);
+}
+
+/**
+ * F-04 - what a line manager may EDIT. `employee.update` was granted to MANAGER for placement changes on
+ * their team ("department/location"), but the service accepted every field: a manager could rewrite a
+ * report's work email, joining date, reporting manager or personal data. A MANAGER may now change only
+ * department, designation and location, never their own record, and only fields that actually change are
+ * judged (the edit form always submits the whole record).
+ */
+const MANAGER_EDITABLE_FIELDS: ReadonlySet<string> = new Set(["departmentId", "designationId", "locationId"]);
+
+function assertManagerMayChange(ctx: RequestContext, existing: Employee, input: UpdateEmployeeInput): void {
+  if (ctx.role !== "MANAGER") return;
+  if (existing.id === ctx.employeeId) {
+    throw new AuthorizationError("A manager cannot edit their own employee record.");
+  }
+  const current = existing as unknown as Record<string, unknown>;
+  const forbidden = Object.entries(input as Record<string, unknown>)
+    .filter(([key, next]) => {
+      if (MANAGER_EDITABLE_FIELDS.has(key) || next === undefined) return false;
+      const normalize = (value: unknown) => (typeof value === "string" && key === "workEmail" ? value.toLowerCase().trim() : (value ?? null));
+      return normalize(next) !== normalize(current[key]);
+    })
+    .map(([key]) => key);
+  if (forbidden.length > 0) {
+    throw new AuthorizationError(`A manager may only change department, designation and location. Not permitted: ${forbidden.join(", ")}.`);
+  }
+}
+
 async function assertValidManager(ctx: RequestContext, managerId: string): Promise<void> {
   const manager = await employeeRepository.findById(managerId);
   if (!manager) throw new EmployeeNotFoundError();
@@ -156,7 +191,8 @@ async function assertNoCircularManagerHierarchy(employeeId: string, newManagerId
 
 export async function listEmployees(ctx: RequestContext, filters: EmployeeListFilters): Promise<EmployeeListResult> {
   requirePermission(ctx, "employee.view");
-  const clamped = clampPagination(filters);
+  const scope = await getEmployeeScope(ctx);
+  const clamped = { ...clampPagination(filters), ...(scope ? { scopeEmployeeIds: [...scope] } : {}) };
   const [items, total] = await Promise.all([
     employeeRepository.listByCompany(ctx.companyId, clamped),
     employeeRepository.countByCompany(ctx.companyId, clamped),
@@ -176,10 +212,15 @@ export async function listActiveEmployeesForDropdown(
   ctx: RequestContext,
 ): Promise<{ id: string; employeeNumber: string; firstName: string; lastName: string }[]> {
   requirePermission(ctx, "employee.view");
-  return employeeRepository.listActiveForDropdown(ctx.companyId);
+  const scope = await getEmployeeScope(ctx);
+  const all = await employeeRepository.listActiveForDropdown(ctx.companyId);
+  return scope ? all.filter((e) => scope.has(e.id)) : all;
 }
 
 export async function getEmployee(ctx: RequestContext, employeeId: string): Promise<EmployeeWithRelations> {
+  // F-24: decide permission BEFORE looking the employee up, so a caller without it gets the same denial whether or
+  // not the id exists. (`ctx.employeeId` is the caller's own employee, resolved from their session.)
+  if (ctx.employeeId !== employeeId) requirePermission(ctx, "employee.view");
   const employee = await employeeRepository.findByIdWithRelations(employeeId);
   if (!employee) throw new EmployeeNotFoundError();
   assertCompanyAccess(ctx, employee.companyId);
@@ -187,6 +228,7 @@ export async function getEmployee(ctx: RequestContext, employeeId: string): Prom
   const self = isSelf(ctx, employee);
   if (!self) {
     requirePermission(ctx, "employee.view");
+    await assertInManagerScope(ctx, employee.id);
   }
   if (self || can(ctx.role, "employee.view_private")) {
     return employee;
@@ -230,6 +272,12 @@ export async function createEmployee(ctx: RequestContext, input: CreateEmployeeI
       if (isUniqueViolation(error)) {
         const existing = await employeeRepository.findByWorkEmail(ctx.companyId, workEmail);
         if (existing) throw new DuplicateWorkEmailError(workEmail);
+        // A login can be the employee record of exactly one person (employees.user_id is unique). Say so,
+        // instead of mislabelling it as a duplicate employee number. (Deliberately generic: it does not say
+        // which company the other record belongs to.)
+        if (input.userId && (await employeeRepository.findAnyByUserId(input.userId))) {
+          throw new InvalidUserLinkError("This user account is already linked to an employee record.");
+        }
         throw new DuplicateEmployeeNumberError();
       }
       throw error;
@@ -273,6 +321,8 @@ export async function updateEmployee(
   const existing = await employeeRepository.findById(employeeId);
   if (!existing) throw new EmployeeNotFoundError();
   assertCompanyAccess(ctx, existing.companyId);
+  await assertInManagerScope(ctx, existing.id);
+  assertManagerMayChange(ctx, existing, input);
 
   await assertReferencedEntitiesBelongToCompany(ctx, input);
   if (input.managerId) {
@@ -322,6 +372,9 @@ export async function updateEmployee(
   return employee;
 }
 
+/** Statuses that mean the person has left: their login for this company is deactivated with the change. */
+const ACCESS_ENDING_STATUSES: ReadonlySet<EmploymentStatus> = new Set<EmploymentStatus>(["RESIGNED", "TERMINATED"]);
+
 const STATUS_EVENT_MAP: Partial<Record<EmploymentStatus, EmployeeHistoryEventType>> = {
   RESIGNED: "RESIGNED",
   TERMINATED: "TERMINATED",
@@ -338,7 +391,9 @@ export async function changeEmployeeStatus(
   if (!existing) throw new EmployeeNotFoundError();
   assertCompanyAccess(ctx, existing.companyId);
 
+  let revokedAccess: { userId: string; role: string } | null = null;
   const employee = await db.transaction(async (tx) => {
+    revokedAccess = null;
     const updated = await employeeRepository.setEmploymentStatus(employeeId, status, ctx.userId, tx);
     await employeeHistoryRepository.create(tx, {
       companyId: ctx.companyId,
@@ -349,6 +404,21 @@ export async function changeEmployeeStatus(
       after: { employmentStatus: status },
       note,
     });
+
+    // F-12 - leaving the company ends access in the same transaction. A resigned/terminated employee's
+    // linked login keeps working otherwise (a departed manager or HR user included). Only THIS company's
+    // membership is deactivated and only THIS company's sessions are revoked; the user may belong to
+    // others. It uses the existing user-management rule: the actor must outrank the account's role
+    // (so HR cannot lock a company admin out by terminating them), and one never revokes oneself.
+    // Reinstating the employee does NOT silently re-enable the login - that stays an explicit user-management action.
+    if (ACCESS_ENDING_STATUSES.has(status) && updated.userId && updated.userId !== ctx.userId) {
+      const membership = await companyMembershipRepository.findForUserAndCompany(updated.userId, ctx.companyId);
+      if (membership && canManageUserRole(ctx.role, membership.role)) {
+        await userManagementRepository.setMembershipActive(membership.id, false, tx);
+        await invalidateSessionsForUserInCompany(updated.userId, ctx.companyId, tx);
+        revokedAccess = { userId: updated.userId, role: membership.role };
+      }
+    }
     return updated;
   });
 
@@ -358,7 +428,17 @@ export async function changeEmployeeStatus(
     entityId: employee.id,
     oldData: { employmentStatus: existing.employmentStatus },
     newData: { employmentStatus: employee.employmentStatus },
+    metadata: { loginAccessRevoked: revokedAccess !== null },
   });
+  const revoked = revokedAccess as { userId: string; role: string } | null;
+  if (revoked) {
+    await recordAuditLog(ctx, {
+      action: "user.deactivated",
+      entityType: "user",
+      entityId: revoked.userId,
+      metadata: { targetRole: revoked.role, sessionsInvalidated: true, reason: `employee_status:${status}`, employeeId: employee.id },
+    });
+  }
   return employee;
 }
 
@@ -403,12 +483,14 @@ export async function archiveEmployee(ctx: RequestContext, employeeId: string): 
 }
 
 export async function listEmployeeHistory(ctx: RequestContext, employeeId: string): Promise<EmployeeHistoryEntry[]> {
+  if (ctx.employeeId !== employeeId) requirePermission(ctx, "employee.view"); // F-24: permission first
   const employee = await employeeRepository.findById(employeeId);
   if (!employee) throw new EmployeeNotFoundError();
   assertCompanyAccess(ctx, employee.companyId);
 
   if (!isSelf(ctx, employee)) {
     requirePermission(ctx, "employee.view");
+    await assertInManagerScope(ctx, employee.id);
   }
   return employeeHistoryRepository.listByEmployee(employeeId);
 }
@@ -420,11 +502,15 @@ function startOfCurrentMonthIso(): string {
 
 export async function getEmployeeCounts(ctx: RequestContext) {
   requirePermission(ctx, "employee.view");
+  // F-02: every employee-based figure counts only a MANAGER's own reporting line. (Department/location
+  // counts describe the company's structure, not people, and stay as they are.)
+  const scope = await getEmployeeScope(ctx);
+  const scopeIds = scope ? [...scope] : undefined;
   const [employeeCounts, departments, branches, newJoiners] = await Promise.all([
-    employeeRepository.getCounts(ctx.companyId),
+    employeeRepository.getCounts(ctx.companyId, scopeIds),
     departmentRepository.listByCompany(ctx.companyId),
     branchRepository.listByCompany(ctx.companyId),
-    employeeRepository.countNewJoinersSince(ctx.companyId, startOfCurrentMonthIso()),
+    employeeRepository.countNewJoinersSince(ctx.companyId, startOfCurrentMonthIso(), scopeIds),
   ]);
 
   return {
@@ -439,11 +525,13 @@ export async function getEmployeeCounts(ctx: RequestContext) {
 }
 
 export async function getOnboarding(ctx: RequestContext, employeeId: string): Promise<EmployeeOnboardingWithTasks | null> {
+  if (ctx.employeeId !== employeeId) requirePermission(ctx, "employee.view"); // F-24: permission first
   const employee = await employeeRepository.findById(employeeId);
   if (!employee) throw new EmployeeNotFoundError();
   assertCompanyAccess(ctx, employee.companyId);
   if (!isSelf(ctx, employee)) {
     requirePermission(ctx, "employee.view");
+    await assertInManagerScope(ctx, employee.id);
   }
   const onboarding = await employeeOnboardingRepository.findByEmployee(employeeId);
   return onboarding ?? null;
@@ -516,14 +604,18 @@ export async function updateOnboardingTask(
  */
 export async function getOrgChartSubtree(ctx: RequestContext, managerId: string | null): Promise<OrgChartNode[]> {
   requirePermission(ctx, "employee.view");
+  const scope = await getEmployeeScope(ctx);
 
   if (managerId) {
     const manager = await employeeRepository.findById(managerId);
     if (!manager) throw new EmployeeNotFoundError();
     assertCompanyAccess(ctx, manager.companyId);
+    if (scope && !scope.has(managerId)) throw new AuthorizationError("This employee is outside your team.");
   }
 
-  const level = await employeeRepository.listOrgChartLevel(ctx.companyId, managerId);
+  // A MANAGER's chart starts at themself and shows only their own line; other roles see the whole company.
+  const fullLevel = await employeeRepository.listOrgChartLevel(ctx.companyId, managerId);
+  const level = scope ? fullLevel.filter((e) => (managerId === null ? e.id === ctx.employeeId : scope.has(e.id))) : fullLevel;
   const counts = await employeeRepository.countDirectReportsForManagers(level.map((e) => e.id));
 
   return level.map((e) => ({
@@ -554,6 +646,7 @@ function toDocumentSummary(document: EmployeeDocument): EmployeeDocumentSummary 
 }
 
 async function assertCanAccessEmployeeDocuments(ctx: RequestContext, employeeId: string): Promise<Employee> {
+  if (ctx.employeeId !== employeeId) requirePermission(ctx, "employee.view_documents"); // F-24: permission first
   const employee = await employeeRepository.findById(employeeId);
   if (!employee) throw new EmployeeNotFoundError();
   assertCompanyAccess(ctx, employee.companyId);
@@ -594,7 +687,7 @@ export async function initiateEmployeeDocumentUpload(
   // request fails, no DB record should be left behind pointing at a key that was never uploaded
   // to (an earlier version of this function did the insert first and leaked exactly that kind
   // of orphan row when storage was unavailable).
-  const uploadUrl = await storage.getUploadUrl(storageKey, input.mimeType);
+  const uploadUrl = await storage.getUploadUrl(storageKey, input.mimeType, input.sizeBytes);
 
   const document = await employeeDocumentRepository.create({
     id: documentId,

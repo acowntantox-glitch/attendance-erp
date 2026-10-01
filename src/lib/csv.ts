@@ -19,7 +19,7 @@ function escapeCsvField(value: string): string {
  * duration fields, which are always drawn from a fixed vocabulary or formatted numbers and can
  * never carry a formula prefix.
  */
-const FORMULA_PREFIXES = ["=", "+", "-", "@"];
+const FORMULA_PREFIXES = ["=", "+", "-", "@", "\t", "\r"]; // OWASP: also a leading tab/CR
 export function neutralizeFormulaInjection(value: string): string {
   return FORMULA_PREFIXES.some((prefix) => value.startsWith(prefix)) ? `'${value}` : value;
 }

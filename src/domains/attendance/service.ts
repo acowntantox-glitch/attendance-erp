@@ -3,10 +3,11 @@ import { db } from "@/db/client";
 import type { RequestContext } from "@/lib/auth/request-context";
 import { assertCompanyAccess, requirePermission } from "@/lib/auth/request-context";
 import { canReviewAttendanceCorrection } from "@/lib/auth/rbac";
-import { AuthorizationError, isUniqueViolation } from "@/lib/errors";
+import { AuthorizationError, ResourceHiddenError, isUniqueViolation } from "@/lib/errors";
 import { recordAuditLog } from "@/domains/audit/service";
 import { employeeRepository } from "@/domains/employee/repository";
 import { EmployeeNotFoundError } from "@/domains/employee/errors";
+import { assertEmployeeInScope, getEmployeeScope } from "@/domains/employee/scope";
 import { getWorkforceDayInfo, resolveEmployeeTimezone, resolveWorkforceDayInfo } from "@/domains/workforce/service";
 import type { WorkforceDayInfo } from "@/domains/workforce/model";
 import { addDays, isValidIsoDate, utcToZonedWallTime, zonedWallTimeToUtc } from "@/lib/datetime";
@@ -77,6 +78,7 @@ async function loadEmployeeInCompany(ctx: RequestContext, employeeId: string) {
   const employee = await employeeRepository.findById(employeeId);
   if (!employee) throw new EmployeeNotFoundError();
   assertCompanyAccess(ctx, employee.companyId);
+  await assertEmployeeInScope(ctx, employee.id); // F-02: a MANAGER reaches only their own reporting line
   return employee;
 }
 
@@ -801,11 +803,12 @@ async function findSessionClosedByCorrection(correction: AttendanceCorrection, e
  * untouched (no synthetic CHECK_OUT event): the correction row is the record of why. Runs inside the
  * approval transaction, under the day lock, before any session row lock (period -> day -> session).
  */
-async function closeSessionResolvedByCorrection(correction: AttendanceCorrection, tx: Transaction): Promise<void> {
+async function closeSessionResolvedByCorrection(correction: AttendanceCorrection, tx: Transaction): Promise<string | null> {
   await lockAttendanceDay(tx, correction.employeeId, correction.workDate);
   const open = await attendanceSessionRepository.findOpenForEmployeeLocked(correction.employeeId, tx);
-  if (!open || open.workDate !== correction.workDate) return;
+  if (!open || open.workDate !== correction.workDate) return null;
   await attendanceSessionRepository.markClosed(tx, open.id, correction.correctedValue);
+  return open.id;
 }
 
 /**
@@ -945,6 +948,8 @@ export async function recalculateDailyRecord(ctx: RequestContext, requestedEmplo
     throw new InvalidAttendanceDateError("Attendance cannot be calculated for a date before the employee joined.");
   }
 
+  const before = await attendanceDailyRecordRepository.findOne(targetEmployeeId, workDate);
+
   // Batch 8 — a closed period cannot be recalculated (§15). Wrapped in its own transaction purely
   // to hold the period's SHARE lock for the duration of the write that follows; `recalculateDailyRecordInternal`
   // otherwise has no transactional needs of its own (a single upsert statement is already atomic).
@@ -956,6 +961,7 @@ export async function recalculateDailyRecord(ctx: RequestContext, requestedEmplo
     action: "attendance.recalculate",
     entityType: "attendance_daily_record",
     entityId: record.id,
+    oldData: before ?? null, // F-10: what the day looked like before it was recalculated
     newData: record,
     metadata: { employeeId: targetEmployeeId, workDate },
   });
@@ -1272,8 +1278,9 @@ export async function getCorrectionDetail(ctx: RequestContext, correctionId: str
   if (!correction) throw new AttendanceCorrectionNotFoundError();
   assertCompanyAccess(ctx, correction.companyId);
   if (ctx.role === "EMPLOYEE" && correction.employeeId !== ctx.employeeId) {
-    throw new AuthorizationError("You may only view your own attendance corrections.");
+    throw new ResourceHiddenError("You may only view your own attendance corrections."); // F-24: reads as "not found" at the API
   }
+  await assertEmployeeInScope(ctx, correction.employeeId); // F-02
   return correction;
 }
 
@@ -1299,7 +1306,9 @@ async function reviewCorrection(
   status: "APPROVED" | "REJECTED",
   input: ReviewCorrectionInput,
 ): Promise<AttendanceCorrection> {
+  let closedSessionId: string | null = null; // F-10: the stranded session an approval closed, for the audit entry
   const correction = await db.transaction(async (tx) => {
+    closedSessionId = null;
     const existing = await attendanceCorrectionRepository.findByIdLocked(correctionId, tx);
     if (!existing) throw new AttendanceCorrectionNotFoundError();
     assertCompanyAccess(ctx, existing.companyId);
@@ -1311,6 +1320,11 @@ async function reviewCorrection(
     await assertAttendancePeriodOpen(ctx.companyId, existing.workDate, tx);
 
     if (existing.requestedByUserId === ctx.userId) {
+      throw new SelfApprovalNotAllowedError();
+    }
+    // F-18 - nor may anyone review a correction to THEIR OWN attendance, even when someone else filed it
+    // (otherwise a colleague could request a change to a reviewer's day and the reviewer approve it).
+    if (ctx.employeeId !== null && existing.employeeId === ctx.employeeId) {
       throw new SelfApprovalNotAllowedError();
     }
 
@@ -1335,7 +1349,7 @@ async function reviewCorrection(
     if (status === "APPROVED") {
       try {
         if (existing.fieldChanged === "CHECK_OUT" && existing.eventId === null) {
-          await closeSessionResolvedByCorrection(existing, tx);
+          closedSessionId = await closeSessionResolvedByCorrection(existing, tx);
         }
         await recalculateDailyRecordInternal(ctx.companyId, existing.employeeId, existing.workDate, tx);
       } catch {
@@ -1352,7 +1366,14 @@ async function reviewCorrection(
     entityId: correction.id,
     oldData: { status: "PENDING" },
     newData: correction,
-    metadata: { employeeId: correction.employeeId, workDate: correction.workDate, requestedByUserId: correction.requestedByUserId },
+    metadata: {
+      employeeId: correction.employeeId,
+      workDate: correction.workDate,
+      requestedByUserId: correction.requestedByUserId,
+      field: correction.fieldChanged,
+      reviewNote: correction.reviewNote,
+      ...(closedSessionId ? { closedSessionId } : {}),
+    },
   });
   return correction;
 }
@@ -1440,23 +1461,31 @@ export async function getAttendanceDashboard(ctx: RequestContext, filters: Atten
     throw new AuthorizationError("The attendance dashboard is not available to this role.");
   }
 
-  const clamped: AttendanceDashboardFilters = {
+  // F-02 - a MANAGER's dashboard covers their own reporting line only.
+  const scope = await getEmployeeScope(ctx);
+  const scopeIds = scope ? [...scope] : undefined;
+
+  const clamped: AttendanceDashboardFilters & { scopeIds?: string[] } = {
     ...filters,
     page: Math.max(1, filters.page || 1),
     pageSize: Math.min(DASHBOARD_MAX_PAGE_SIZE, Math.max(1, filters.pageSize || DASHBOARD_DEFAULT_PAGE_SIZE)),
+    scopeIds,
   };
 
   const [totalEmployees, statusCountRows, tableRows, tableTotal, sessionsForDate, lateRecords, incompleteRecords, currentlyWorkingSessions] =
     await Promise.all([
-      attendanceDashboardRepository.countActiveEmployees(ctx.companyId),
-      attendanceDashboardRepository.getStatusCounts(ctx.companyId, clamped.workDate),
+      attendanceDashboardRepository.countActiveEmployees(ctx.companyId, scopeIds),
+      attendanceDashboardRepository.getStatusCounts(ctx.companyId, clamped.workDate, scopeIds),
       attendanceDashboardRepository.listTableRows(ctx.companyId, clamped.workDate, clamped),
       attendanceDashboardRepository.countTableRows(ctx.companyId, clamped.workDate, clamped),
       attendanceDashboardRepository.listSessionsForWorkDate(ctx.companyId, clamped.workDate),
       attendanceDashboardRepository.listRecordsByStatus(ctx.companyId, clamped.workDate, "LATE"),
       attendanceDashboardRepository.listRecordsByStatus(ctx.companyId, clamped.workDate, "INCOMPLETE"),
       attendanceDashboardRepository.listCurrentlyWorking(ctx.companyId),
-    ]);
+    ]).then(([a, b, c, d, sessions, late, incomplete, working]) =>
+      // The bounded per-date lists are narrowed to the scope here (they are small by construction).
+      [a, b, c, d, scope ? sessions.filter((s) => scope.has(s.employeeId)) : sessions, scope ? late.filter((r) => scope.has(r.employeeId)) : late, scope ? incomplete.filter((r) => scope.has(r.employeeId)) : incomplete, scope ? working.filter((s) => scope.has(s.employeeId)) : working] as const,
+    );
 
   const statusCounts = Object.fromEntries(ALL_DAILY_STATUSES.map((status) => [status, 0])) as Record<AttendanceDailyStatus, number>;
   for (const row of statusCountRows) statusCounts[row.status] = row.value;

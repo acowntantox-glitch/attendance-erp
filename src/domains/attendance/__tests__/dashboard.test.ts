@@ -350,9 +350,31 @@ describe.skipIf(!available)("attendance dashboard", () => {
       await expect(svc.getAttendanceDashboard(ctxEmployee, { workDate: DATE, page: 1, pageSize: 25 })).rejects.toThrow(AuthorizationError);
     });
 
-    it("allows MANAGER access with the existing company-wide attendance.view scope (no new restriction)", async () => {
-      const result = await svc.getAttendanceDashboard(ctxManager, { workDate: DATE, page: 1, pageSize: 50 });
-      expect(result.table.items.some((r) => r.id === employeePresentId)).toBe(true);
+    it("F-02: a MANAGER's dashboard covers only their own reporting line (not the company)", async () => {
+      const lead = await employeeService.createEmployee(ctx, {
+        firstName: "Dash",
+        lastName: `Lead-${Date.now()}`,
+        workEmail: `dash-lead-${Date.now()}@test.local`,
+        dateOfJoining: "2020-01-01",
+      });
+      await db.update(schema.employees).set({ managerId: lead.id }).where(eq(schema.employees.id, employeePresentId));
+      try {
+        const ctxLead = { ...ctxManager, employeeId: lead.id };
+        const result = await svc.getAttendanceDashboard(ctxLead, { workDate: DATE, page: 1, pageSize: 50 });
+        // The manager themself plus the one report - nobody else in the company.
+        expect(result.table.items.map((r) => r.id).sort()).toEqual([lead.id, employeePresentId].sort());
+        expect(result.summary.totalEmployees).toBe(2);
+        const team = new Set([lead.id, employeePresentId]);
+        expect(result.lateArrivals.every((r) => team.has(r.id))).toBe(true);
+        expect(result.currentlyWorking.every((r) => team.has(r.id))).toBe(true);
+
+        // A manager with no linked employee, or with no reports, sees nothing - never the whole company.
+        const none = await svc.getAttendanceDashboard(ctxManager, { workDate: DATE, page: 1, pageSize: 50 });
+        expect(none.table.items).toHaveLength(0);
+        expect(none.summary.totalEmployees).toBe(0);
+      } finally {
+        await db.update(schema.employees).set({ managerId: null }).where(eq(schema.employees.id, employeePresentId));
+      }
     });
 
     it("allows HR_ADMIN access", async () => {

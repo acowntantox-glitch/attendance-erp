@@ -37,6 +37,8 @@ function buildFilters(companyId: string, filters: Partial<EmployeeListFilters>) 
   if (filters.employmentType) conditions.push(eq(employees.employmentType, filters.employmentType));
   if (filters.joinedFrom) conditions.push(gte(employees.dateOfJoining, filters.joinedFrom));
   if (filters.joinedTo) conditions.push(lte(employees.dateOfJoining, filters.joinedTo));
+  // F-02: a MANAGER's reporting-line scope (empty list => matches nobody).
+  if (filters.scopeEmployeeIds) conditions.push(filters.scopeEmployeeIds.length > 0 ? inArray(employees.id, filters.scopeEmployeeIds) : sql`false`);
 
   return and(...conditions);
 }
@@ -55,6 +57,11 @@ function sortColumn(sort: EmployeeListFilters["sort"]) {
     default:
       return [asc(employees.firstName), asc(employees.lastName)];
   }
+}
+
+function scopeClause(scopeIds: string[] | undefined) {
+  if (!scopeIds) return undefined;
+  return scopeIds.length > 0 ? inArray(employees.id, scopeIds) : sql`false`;
 }
 
 export const employeeRepository = {
@@ -101,6 +108,24 @@ export const employeeRepository = {
       where: eq(employees.id, id),
       with: { department: true, designation: true, location: true, manager: true },
     });
+  },
+  /** Everyone below `managerId` in the reporting line (direct and indirect), same company, not archived.
+   *  UNION (not UNION ALL) so a pre-existing management cycle cannot loop forever. Excludes the manager. */
+  async listTeamIds(companyId: string, managerId: string, executor: DbExecutor = db): Promise<string[]> {
+    const result = await executor.execute<{ id: string }>(sql`
+      with recursive team(id) as (
+        select e.id from employees e
+        where e.company_id = ${companyId} and e.manager_id = ${managerId} and e.is_archived = false
+        union
+        select e.id from employees e join team t on e.manager_id = t.id
+        where e.company_id = ${companyId} and e.is_archived = false
+      )
+      select id from team where id <> ${managerId}`);
+    return result.rows.map((row) => row.id);
+  },
+  /** Any employee record linked to this login, in any company (the link is unique across companies). */
+  findAnyByUserId(userId: string) {
+    return db.query.employees.findFirst({ where: eq(employees.userId, userId), columns: { id: true } });
   },
   findByUserId(companyId: string, userId: string) {
     return db.query.employees.findFirst({
@@ -244,7 +269,8 @@ export const employeeRepository = {
       .returning()
       .then((rows) => rows[0]!);
   },
-  getCounts(companyId: string) {
+  /** `scopeIds` (F-02): a MANAGER's reporting-line scope - only those employees are counted (empty => none). */
+  getCounts(companyId: string, scopeIds?: string[]) {
     return db
       .select({
         total: count(),
@@ -253,15 +279,15 @@ export const employeeRepository = {
         noticePeriod: count(sql`case when ${employees.employmentStatus} = 'NOTICE_PERIOD' then 1 end`),
       })
       .from(employees)
-      .where(and(eq(employees.companyId, companyId), eq(employees.isArchived, false)))
+      .where(and(eq(employees.companyId, companyId), eq(employees.isArchived, false), scopeClause(scopeIds)))
       .then((rows) => rows[0]!);
   },
-  countNewJoinersSince(companyId: string, sinceDate: string) {
+  countNewJoinersSince(companyId: string, sinceDate: string, scopeIds?: string[]) {
     return db
       .select({ value: count() })
       .from(employees)
       .where(
-        and(eq(employees.companyId, companyId), eq(employees.isArchived, false), gte(employees.dateOfJoining, sinceDate)),
+        and(eq(employees.companyId, companyId), eq(employees.isArchived, false), gte(employees.dateOfJoining, sinceDate), scopeClause(scopeIds)),
       )
       .then((rows) => rows[0]?.value ?? 0);
   },

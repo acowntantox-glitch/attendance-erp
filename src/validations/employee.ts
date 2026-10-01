@@ -110,15 +110,50 @@ export const listEmployeesQuerySchema = z.object({
   sort: z.enum(["name_asc", "name_desc", "joined_asc", "joined_desc", "employee_number_asc"]).optional(),
 });
 
-export const createEmployeeDocumentSchema = z.object({
-  documentType: documentTypeSchema,
-  title: z.string().min(1).max(200),
-  originalFilename: z.string().min(1).max(255),
-  mimeType: z.string().min(1).max(120),
-  sizeBytes: z.number().int().min(1).max(25 * 1024 * 1024), // 25MB cap
-  issueDate: isoDate.optional(),
-  expiryDate: isoDate.optional(),
-});
+/**
+ * Employee documents are scanned copies of contracts, IDs, visas and certificates, so only those formats are
+ * accepted, and the file extension must agree with the declared type. The bytes go straight from the browser to
+ * the bucket (this server never sees them), so `mimeType`/`sizeBytes` are a client's CLAIMS: the server's job is to
+ * refuse anything outside this list and then BIND the upload to what was approved - the presigned URL signs this
+ * exact Content-Type and Content-Length, so the bucket rejects a body that differs (see `storage.getUploadUrl`).
+ */
+export const ALLOWED_DOCUMENT_TYPES: Readonly<Record<string, readonly string[]>> = {
+  "application/pdf": ["pdf"],
+  "image/jpeg": ["jpg", "jpeg"],
+  "image/png": ["png"],
+  "application/msword": ["doc"],
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ["docx"],
+};
+
+export function isAllowedDocumentType(mimeType: string): boolean {
+  return Object.prototype.hasOwnProperty.call(ALLOWED_DOCUMENT_TYPES, mimeType);
+}
+
+export const createEmployeeDocumentSchema = z
+  .object({
+    documentType: documentTypeSchema,
+    title: z.string().min(1).max(200),
+    // No path separators or control characters (it ends up in a storage key and a download header).
+    originalFilename: z
+      .string()
+      .min(1)
+      .max(255)
+      .refine((name) => !/[\\/\x00-\x1f\x7f]/.test(name), "The file name contains characters that are not allowed."),
+    mimeType: z.string().min(1).max(120),
+    sizeBytes: z.number().int().min(1).max(25 * 1024 * 1024), // 25MB cap
+    issueDate: isoDate.optional(),
+    expiryDate: isoDate.optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (!isAllowedDocumentType(value.mimeType)) {
+      ctx.addIssue({ code: "custom", path: ["mimeType"], message: "This file type is not allowed. Upload a PDF, JPEG, PNG, DOC or DOCX." });
+      return;
+    }
+    const extension = value.originalFilename.split(".").pop()?.toLowerCase() ?? "";
+    if (!ALLOWED_DOCUMENT_TYPES[value.mimeType]!.includes(extension)) {
+      ctx.addIssue({ code: "custom", path: ["originalFilename"], message: "The file extension does not match the file type." });
+    }
+  });
 
 export type CreateEmployeeInput = z.infer<typeof createEmployeeSchema>;
 export type UpdateEmployeeInput = z.infer<typeof updateEmployeeSchema>;

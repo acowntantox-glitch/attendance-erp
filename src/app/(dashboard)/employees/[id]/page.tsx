@@ -4,6 +4,7 @@ import { getRequestContext } from "@/lib/auth/request-context";
 import { can } from "@/lib/auth/rbac";
 import { getEmployee, getOnboarding, listEmployeeDocuments, listEmployeeHistory } from "@/domains/employee/service";
 import { EmployeeNotFoundError } from "@/domains/employee/errors";
+import { AuthorizationError } from "@/lib/errors";
 import {
   getCompanyDefaultWeeklyOff,
   getEmployeeWeeklyOffOverride,
@@ -38,7 +39,8 @@ export default async function EmployeeProfilePage({ params }: { params: Promise<
   try {
     employee = await getEmployee(ctx, id);
   } catch (error) {
-    if (error instanceof EmployeeNotFoundError) notFound();
+    // An employee outside a manager's team reads as "not found" (F-02) rather than crashing the page.
+    if (error instanceof EmployeeNotFoundError || error instanceof AuthorizationError) notFound();
     throw error;
   }
 

@@ -10,6 +10,7 @@
 import { attendanceDailyStatusEnum } from "@/db/schema";
 import type { RequestContext } from "@/lib/auth/request-context";
 import { requirePermission } from "@/lib/auth/request-context";
+import { recordAuditLog } from "@/domains/audit/service";
 import { BusinessRuleError } from "@/lib/errors";
 import { buildCsv, neutralizeFormulaInjection } from "@/lib/csv";
 import { attendanceReportRepository, type AttendanceReportFilters, type AttendanceReportRow } from "./attendance-report.repository";
@@ -118,7 +119,7 @@ function formatMinutesAsClock(minutes: number | null): string {
 
 export function buildAttendanceReportCsv(rows: AttendanceReportRow[]): string {
   const body = rows.map((row) => [
-    row.employeeNumber,
+    neutralizeFormulaInjection(row.employeeNumber), // F-22: free text typed by HR, like the name
     neutralizeFormulaInjection(`${row.firstName} ${row.lastName}`),
     neutralizeFormulaInjection(row.departmentName ?? ""),
     neutralizeFormulaInjection(row.locationName ?? ""),
@@ -153,5 +154,12 @@ export async function exportAttendanceReportCsv(ctx: RequestContext, filters: At
   assertExportRowLimit(total);
 
   const rows = await attendanceReportRepository.listAllRowsForExport(ctx.companyId, filters, REPORT_MAX_EXPORT_ROWS);
+
+  // F-10: a bulk export of employee attendance is a data-egress event - who exported what, and how much.
+  await recordAuditLog(ctx, {
+    action: "attendance.report.export",
+    entityType: "attendance_report",
+    metadata: { filters, rowCount: rows.length },
+  });
   return buildAttendanceReportCsv(rows);
 }

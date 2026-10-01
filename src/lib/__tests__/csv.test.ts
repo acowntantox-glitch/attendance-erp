@@ -39,6 +39,8 @@ describe("neutralizeFormulaInjection", () => {
     ["+1+1", "'+1+1"],
     ["-1+1", "'-1+1"],
     ["@SUM(1)", "'@SUM(1)"],
+    ["\t=1+1", "'\t=1+1"], // F-22: a leading tab / carriage return also starts a formula in some spreadsheets
+    ["\r=1+1", "'\r=1+1"],
   ])("prefixes a leading apostrophe for a dangerous formula prefix (%s)", (input, expected) => {
     expect(neutralizeFormulaInjection(input)).toBe(expected);
   });

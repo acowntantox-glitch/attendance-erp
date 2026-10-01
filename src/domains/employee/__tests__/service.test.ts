@@ -152,11 +152,16 @@ describe.skipIf(!available)("employee service", () => {
 
   it("requires employee.manage_status (not just employee.update) to change employment status", async () => {
     const employee = await service.createEmployee(adminCtx, baseInput({ lastName: "StatusGate" }));
+    // F-02: a manager only reaches their own reporting line, so this manager manages the employee.
+    const teamManager = await service.createEmployee(adminCtx, baseInput({ lastName: "StatusGateMgr" }));
+    await db.update(schema.employees).set({ managerId: teamManager.id }).where(eq(schema.employees.id, employee.id));
+    const teamManagerCtx = { ...managerCtx, employeeId: teamManager.id };
 
     // managerCtx has employee.update but not employee.manage_status (see rbac.ts) — updating a
-    // non-status field succeeds, but changing status must be rejected.
-    await expect(service.updateEmployee(managerCtx, employee.id, { phone: "+1000000" })).resolves.toBeDefined();
-    await expect(service.changeEmployeeStatus(managerCtx, employee.id, "TERMINATED")).rejects.toBeInstanceOf(
+    // placement field (F-04: a manager may only change department/designation/location) succeeds, but
+    // changing status must be rejected.
+    await expect(service.updateEmployee(teamManagerCtx, employee.id, { departmentId })).resolves.toBeDefined();
+    await expect(service.changeEmployeeStatus(teamManagerCtx, employee.id, "TERMINATED")).rejects.toBeInstanceOf(
       AuthorizationError,
     );
 
@@ -244,8 +249,10 @@ describe.skipIf(!available)("employee service", () => {
     const otherEmployee = await service.createEmployee(adminCtx, baseInput({ lastName: "NotSelf" }));
     await expect(service.getEmployee(selfCtx, otherEmployee.id)).rejects.toBeInstanceOf(AuthorizationError);
 
-    // managerCtx has employee.view but not employee.view_private
-    const redacted = await service.getEmployee(managerCtx, employee.id);
+    // managerCtx has employee.view but not employee.view_private (F-02: and sees only their own line)
+    const viewManager = await service.createEmployee(adminCtx, baseInput({ lastName: "SelfViewMgr" }));
+    await db.update(schema.employees).set({ managerId: viewManager.id }).where(eq(schema.employees.id, employee.id));
+    const redacted = await service.getEmployee({ ...managerCtx, employeeId: viewManager.id }, employee.id);
     expect(redacted.personalEmail).toBeNull();
     expect(redacted.firstName).toBe("Test");
 

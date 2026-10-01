@@ -21,11 +21,15 @@ export function buildDocumentKey(companyId: string, employeeId: string, document
   return `companies/${companyId}/employees/${employeeId}/documents/${documentId}-${safeName}`;
 }
 
-/** Presigned PUT URL — the browser uploads bytes directly to S3, not through this server. */
-export async function getUploadUrl(key: string, contentType: string, expiresInSeconds = 300): Promise<string> {
+/**
+ * Presigned PUT URL — the browser uploads bytes directly to S3, not through this server. The approved
+ * Content-Type AND Content-Length are signed headers, so the bucket refuses a body of a different type or size:
+ * what the server validated is what gets stored (the client's declared values are not merely trusted).
+ */
+export async function getUploadUrl(key: string, contentType: string, contentLength: number, expiresInSeconds = 300): Promise<string> {
   const client = requireClient();
-  const command = new PutObjectCommand({ Bucket: env.S3_BUCKET, Key: key, ContentType: contentType });
-  return getSignedUrl(client, command, { expiresIn: expiresInSeconds });
+  const command = new PutObjectCommand({ Bucket: env.S3_BUCKET, Key: key, ContentType: contentType, ContentLength: contentLength });
+  return getSignedUrl(client, command, { expiresIn: expiresInSeconds, signableHeaders: new Set(["content-type", "content-length"]) });
 }
 
 /**

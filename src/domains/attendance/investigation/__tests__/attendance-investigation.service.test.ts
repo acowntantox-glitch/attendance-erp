@@ -574,10 +574,14 @@ describe.skipIf(!available)("attendance investigation service", () => {
   });
 
   describe("26. RBAC and self-scope", () => {
-    it("MANAGER and HR_MANAGER (existing attendance.view/employee.view holders) can investigate", async () => {
+    it("a MANAGER (for their own team) and HR_MANAGER (existing attendance.view/employee.view holders) can investigate", async () => {
       const WORK_DATE = "2022-08-28";
       const employee = await newEmployee();
-      await expect(investigationSvc.getAttendanceInvestigation(ctxManager, employee.id, WORK_DATE)).resolves.toBeDefined();
+      const lead = await newEmployee();
+      await db.update(schema.employees).set({ managerId: lead.id }).where(eq(schema.employees.id, employee.id));
+      const outsider = await newEmployee(); // F-02: not on the manager's team
+      await expect(investigationSvc.getAttendanceInvestigation({ ...ctxManager, employeeId: lead.id }, employee.id, WORK_DATE)).resolves.toBeDefined();
+      await expect(investigationSvc.getAttendanceInvestigation({ ...ctxManager, employeeId: lead.id }, outsider.id, WORK_DATE)).rejects.toThrow();
       await expect(investigationSvc.getAttendanceInvestigation(ctxHrManager, employee.id, WORK_DATE)).resolves.toBeDefined();
     });
 

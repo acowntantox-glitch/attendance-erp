@@ -4,7 +4,7 @@ import { getRequestContext } from "@/lib/auth/request-context";
 import { can } from "@/lib/auth/rbac";
 import { getEmployee } from "@/domains/employee/service";
 import { EmployeeNotFoundError } from "@/domains/employee/errors";
-import { AuthorizationError } from "@/lib/errors";
+import { AuthorizationError, ResourceHiddenError } from "@/lib/errors";
 import { getAttendanceInvestigation } from "@/domains/attendance/investigation/attendance-investigation.service";
 import { resolveEmployeeTimezone } from "@/domains/workforce/service";
 import { dateSchema } from "@/validations/attendance";
@@ -63,7 +63,8 @@ export default async function EmployeeAttendancePage({ params, searchParams }: R
   try {
     employee = await getEmployee(ctx, id);
   } catch (error) {
-    if (error instanceof EmployeeNotFoundError) notFound();
+    // F-24: an employee outside the caller's company/team reads exactly like a missing one.
+    if (error instanceof EmployeeNotFoundError || error instanceof ResourceHiddenError) notFound();
     if (error instanceof AuthorizationError) {
       return (
         <div className="space-y-6">

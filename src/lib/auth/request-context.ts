@@ -1,6 +1,6 @@
 import { cache } from "react";
 import { cookies, headers } from "next/headers";
-import { AuthenticationError, AuthorizationError, PasswordChangeRequiredError } from "@/lib/errors";
+import { AuthenticationError, AuthorizationError, PasswordChangeRequiredError, ResourceHiddenError } from "@/lib/errors";
 // A per-request lookup, not cached on the session row — acceptable at current scale; if this
 // becomes a hot path, the next step is storing employeeId on the session at login/link time
 // instead of resolving it here on every request.
@@ -91,6 +91,6 @@ export function requirePermission(ctx: RequestContext, permission: Permission): 
  */
 export function assertCompanyAccess(ctx: RequestContext, resourceCompanyId: string): void {
   if (ctx.companyId !== resourceCompanyId) {
-    throw new AuthorizationError("This resource does not belong to your company.");
+    throw new ResourceHiddenError("This resource does not belong to your company.");
   }
 }

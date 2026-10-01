@@ -841,8 +841,17 @@ describe.skipIf(!available)("attendance service", () => {
       expect(correction.employeeId).toBe(employeeAId);
     });
 
-    it("MANAGER can request a correction for any employee in the company but cannot approve or reject one", async () => {
-      const correction = await svc.requestCorrection(ctxManager, employeeGraceId, {
+    it("MANAGER can request a correction for an employee on their team (F-02) but cannot approve or reject one", async () => {
+      const teamManager = await employeeService.createEmployee(ctx, {
+        firstName: "Team",
+        lastName: `Mgr-${Date.now()}`,
+        workEmail: `att-teammgr-${Date.now()}@test.local`,
+        dateOfJoining: "2020-01-01",
+        locationId: branchId,
+      });
+      await db.update(schema.employees).set({ managerId: teamManager.id }).where(eq(schema.employees.id, employeeGraceId));
+      const ctxManagerOfGrace = { ...ctxManager, employeeId: teamManager.id };
+      const correction = await svc.requestCorrection(ctxManagerOfGrace, employeeGraceId, {
         workDate: "2026-02-23",
         fieldChanged: "CHECK_IN",
         correctedValue: new Date("2026-02-23T09:00:00Z"),
@@ -855,6 +864,7 @@ describe.skipIf(!available)("attendance service", () => {
 
       // Read-only for the HR queue too — the backend enforces this, not just hidden buttons.
       await expect(svc.listCompanyCorrections(ctxManager)).rejects.toThrow(AuthorizationError);
+      await db.update(schema.employees).set({ managerId: null }).where(eq(schema.employees.id, employeeGraceId));
 
       const detail = await svc.getCorrectionDetail(ctx, correction.id);
       expect(detail.status).toBe("PENDING");
@@ -1240,7 +1250,17 @@ describe.skipIf(!available)("attendance service", () => {
       });
 
       it("HR_MANAGER can approve a correction requested by MANAGER", async () => {
-        const correction = await svc.requestCorrection(managerRoleCtx, employeeAId, {
+        // F-02: the manager requests for someone on their own team.
+        const teamManager = await employeeService.createEmployee(ctx, {
+          firstName: "Hier",
+          lastName: `Mgr-${Date.now()}`,
+          workEmail: `att-hier-mgr-${Date.now()}@test.local`,
+          dateOfJoining: "2020-01-01",
+          locationId: branchId,
+        });
+        await db.update(schema.employees).set({ managerId: teamManager.id }).where(eq(schema.employees.id, employeeAId));
+        const managerOfA = { ...managerRoleCtx, employeeId: teamManager.id };
+        const correction = await svc.requestCorrection(managerOfA, employeeAId, {
           workDate: "2026-04-11",
           fieldChanged: "CHECK_IN",
           correctedValue: new Date("2026-04-11T09:00:00Z"),
@@ -1248,6 +1268,7 @@ describe.skipIf(!available)("attendance service", () => {
         });
         const approved = await svc.approveCorrection(hrManagerRoleCtx, correction.id);
         expect(approved.status).toBe("APPROVED");
+        await db.update(schema.employees).set({ managerId: null }).where(eq(schema.employees.id, employeeAId));
       });
 
       it("HR_MANAGER cannot approve a correction requested by HR_ADMIN", async () => {
